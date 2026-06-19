@@ -683,7 +683,14 @@ impl H264CodecDecoder {
             // reference frames for each missing value to keep the
             // sliding window + RPLM picNumX arithmetic aligned with the
             // encoder's view of the DPB.
-            if !is_idr && sps.gaps_in_frame_num_value_allowed_flag {
+            // §8.2.5.2 — the spec gates gap-fill on
+            // gaps_in_frame_num_value_allowed_flag, but many real-world
+            // streams (especially PAFF broadcast content) have the flag
+            // cleared yet still depend on gap-frame PicNum arithmetic
+            // for reference list construction.  Fill gaps regardless so
+            // RPLM operations targeting expected reference frame_nums
+            // resolve to neutral (gray) pictures.
+            if !is_idr {
                 self.fill_frame_num_gap(&sps, header.frame_num)?;
             }
 
@@ -797,6 +804,19 @@ impl H264CodecDecoder {
         let current_is_field = header.field_pic_flag;
         let pic_order_cnt = in_progress.poc.pic_order_cnt;
         let is_idr = in_progress.is_idr;
+
+        if std::env::var_os("OXIDEAV_H264_REFLIST_TRACE").is_some() {
+            eprintln!(
+                "[REFLIST] slice type={:?} frame_num={} field_pic={} bottom={} dpb_entries={} gaps_allowed={} prev_ref={:?}",
+                header.slice_type,
+                header.frame_num,
+                header.field_pic_flag,
+                header.bottom_field_flag,
+                self.dpb_entries.len(),
+                sps.gaps_in_frame_num_value_allowed_flag,
+                self.prev_ref_frame_num,
+            );
+        }
 
         // Build per-slice RefPicList0 / RefPicList1.
         let (list0, list1) = if is_idr {
@@ -1245,41 +1265,29 @@ impl H264CodecDecoder {
             poc.pic_order_cnt
         };
 
-        // Incomplete grids are stored as references but NOT emitted as
-        // VideoFrames (the pixel regions beyond the decoded MBs are
-        // zero-initialised and would corrupt PSNR).
-        if grid_complete {
-            if first_header.field_pic_flag {
-                // PAFF field weaving: pair top+bottom fields of the
-                // same frame_num into a full-height frame.
-                if first_header.bottom_field_flag {
-                    if let Some((bid_fnum, top_vf, top_poc)) = self.pending_top_field.take() {
-                        if bid_fnum == first_header.frame_num {
-                            let woven = weave_field_pair(&top_vf, &vf, first_header.frame_num);
-                            let entry = OutputEntry {
-                                picture: woven,
-                                pic_order_cnt: top_poc.min(output_poc),
-                                frame_num: first_header.frame_num,
-                                needed_for_output: true,
-                            };
-                            if let Some(bumped) = self.output_dpb.push(entry) {
-                                self.ready.push_back(bumped.picture);
-                            }
-                        } else {
-                            // Stale pending top: flush it, then push bottom as-is.
-                            self.flush_pending_top_field();
-                            let entry = OutputEntry {
-                                picture: vf,
-                                pic_order_cnt: output_poc,
-                                frame_num: first_header.frame_num,
-                                needed_for_output: true,
-                            };
-                            if let Some(bumped) = self.output_dpb.push(entry) {
-                                self.ready.push_back(bumped.picture);
-                            }
+        // Emit the VideoFrame (for frame pics) or weave+buffer (for
+        // field pics).  Run regardless of grid_complete so the output
+        // geometry matches the expected full-frame dimensions.
+        if first_header.field_pic_flag {
+            // PAFF field weaving: pair top+bottom fields of the
+            // same frame_num into a full-height frame.
+            if first_header.bottom_field_flag {
+                if let Some((bid_fnum, top_vf, top_poc)) = self.pending_top_field.take() {
+                    if bid_fnum == first_header.frame_num {
+                        let woven = weave_field_pair(&top_vf, &vf, first_header.frame_num);
+                        let entry = OutputEntry {
+                            picture: woven,
+                            pic_order_cnt: top_poc.min(output_poc),
+                            frame_num: first_header.frame_num,
+                            needed_for_output: true,
+                        };
+                        if let Some(bumped) = self.output_dpb.push(entry) {
+                            self.ready.push_back(bumped.picture);
                         }
                     } else {
-                        // No pending top: push bottom field as-is.
+                        // Stale pending top (different frame_num):
+                        // flush the stale top, then push bottom as-is.
+                        self.flush_pending_top_field();
                         let entry = OutputEntry {
                             picture: vf,
                             pic_order_cnt: output_poc,
@@ -1291,21 +1299,32 @@ impl H264CodecDecoder {
                         }
                     }
                 } else {
-                    // Top field: flush stale, then buffer.
-                    self.flush_pending_top_field();
-                    self.pending_top_field = Some((first_header.frame_num, vf, output_poc));
+                    // No pending top: push bottom field as-is.
+                    let entry = OutputEntry {
+                        picture: vf,
+                        pic_order_cnt: output_poc,
+                        frame_num: first_header.frame_num,
+                        needed_for_output: true,
+                    };
+                    if let Some(bumped) = self.output_dpb.push(entry) {
+                        self.ready.push_back(bumped.picture);
+                    }
                 }
             } else {
-                // Frame picture: emit directly.
-                let entry = OutputEntry {
-                    picture: vf,
-                    pic_order_cnt: output_poc,
-                    frame_num: first_header.frame_num,
-                    needed_for_output: true,
-                };
-                if let Some(bumped) = self.output_dpb.push(entry) {
-                    self.ready.push_back(bumped.picture);
-                }
+                // Top field: flush any stale pending, then buffer.
+                self.flush_pending_top_field();
+                self.pending_top_field = Some((first_header.frame_num, vf, output_poc));
+            }
+        } else {
+            // Frame picture: emit directly.
+            let entry = OutputEntry {
+                picture: vf,
+                pic_order_cnt: output_poc,
+                frame_num: first_header.frame_num,
+                needed_for_output: true,
+            };
+            if let Some(bumped) = self.output_dpb.push(entry) {
+                self.ready.push_back(bumped.picture);
             }
         }
 

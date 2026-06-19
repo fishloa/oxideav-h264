@@ -452,25 +452,26 @@ pub fn modify_ref_pic_list(
                                 current_bottom,
                             ) == pic_num_lx
                     })
-                    .map(|e| e.dpb_key)
-                    .unwrap_or(u32::MAX);
+                    .map(|e| e.dpb_key);
 
-                splice_into_list(list, ref_idx_lx, num_active as usize, target_key, |k| {
-                    // PicNumF filter — for this routine, the
-                    // "short-term matching" path should skip the
-                    // entry we just inserted. An entry that isn't
-                    // marked short-term gets PicNumF = MaxPicNum
-                    // (per §8.2.4.3.1), which won't equal any
-                    // short-term picNumLX — so we only need to
-                    // suppress re-matching the same dpb_key. The
-                    // spec uses the "PicNumF(RefPicListX[cIdx]) !=
-                    // picNumLX" test; we implement the equivalent
-                    // "dbp_key != target" check because an entry
-                    // at a new list index corresponds to exactly
-                    // one DPB pic per our mapping.
-                    k != target_key
-                });
-                ref_idx_lx += 1;
+                ref_idx_lx = match target_key {
+                    Some(k) => {
+                        splice_into_list(list, ref_idx_lx, num_active as usize, k, |kk| {
+                            kk != k
+                        });
+                        ref_idx_lx + 1
+                    }
+                    None => {
+                        // RPLM op targets a short-term reference that doesn't
+                        // exist in the DPB (e.g. gap frame that was never
+                        // filled).  Leave the ref_idx slot as-is and do not
+                        // advance — per §8.2.4.3, a missing entry means the
+                        // list entry stays at its initialised value.  Since
+                        // we filled the list with u32::MAX sentinels, the
+                        // reconstruct step will use a neutral fallback.
+                        ref_idx_lx
+                    }
+                };
             }
             RplmOp::LongTerm(long_term_pic_num) => {
                 // §8.2.4.3.2 — long-term modification.
@@ -481,13 +482,19 @@ pub fn modify_ref_pic_list(
                             && e.long_term_pic_num(current_is_field, current_bottom)
                                 == long_term_pic_num as i32
                     })
-                    .map(|e| e.dpb_key)
-                    .unwrap_or(u32::MAX);
+                    .map(|e| e.dpb_key);
 
-                splice_into_list(list, ref_idx_lx, num_active as usize, target_key, |k| {
-                    k != target_key
-                });
-                ref_idx_lx += 1;
+                ref_idx_lx = match target_key {
+                    Some(k) => {
+                        splice_into_list(list, ref_idx_lx, num_active as usize, k, |kk| {
+                            kk != k
+                        });
+                        ref_idx_lx + 1
+                    }
+                    None => {
+                        ref_idx_lx
+                    }
+                };
             }
         }
     }
