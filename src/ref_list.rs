@@ -456,9 +456,7 @@ pub fn modify_ref_pic_list(
 
                 ref_idx_lx = match target_key {
                     Some(k) => {
-                        splice_into_list(list, ref_idx_lx, num_active as usize, k, |kk| {
-                            kk != k
-                        });
+                        splice_into_list(list, ref_idx_lx, num_active as usize, k, |kk| kk != k);
                         ref_idx_lx + 1
                     }
                     None => {
@@ -486,14 +484,10 @@ pub fn modify_ref_pic_list(
 
                 ref_idx_lx = match target_key {
                     Some(k) => {
-                        splice_into_list(list, ref_idx_lx, num_active as usize, k, |kk| {
-                            kk != k
-                        });
+                        splice_into_list(list, ref_idx_lx, num_active as usize, k, |kk| kk != k);
                         ref_idx_lx + 1
                     }
-                    None => {
-                        ref_idx_lx
-                    }
+                    None => ref_idx_lx,
                 };
             }
         }
