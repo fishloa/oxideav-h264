@@ -1299,7 +1299,9 @@ impl H264CodecDecoder {
                             let th = top_vf.planes[0].data.len() / top_vf.planes[0].stride;
                             eprintln!(
                                 "[WEAVE] fn={} h={}→{} top0={:?} bot0={:?}",
-                                bid_fnum, th, 2*th,
+                                bid_fnum,
+                                th,
+                                2 * th,
                                 &top_vf.planes[0].data[..16],
                                 &vf.planes[0].data[..16],
                             );
