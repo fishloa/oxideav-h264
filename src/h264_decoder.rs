@@ -1629,7 +1629,10 @@ impl RefPicProvider for BorrowedRefProvider<'_> {
                 if std::env::var_os("OXIDEAV_H264_REFLIST_TRACE").is_some() {
                     eprintln!(
                         "[REFLIST] ref_pic({}, {}) OUT_OF_BOUNDS len_0={} len_1={}",
-                        list, idx, self.list_0.len(), self.list_1.len()
+                        list,
+                        idx,
+                        self.list_0.len(),
+                        self.list_1.len()
                     );
                 }
                 // Fall back to a neutral gray picture so reconstruction
@@ -1642,7 +1645,10 @@ impl RefPicProvider for BorrowedRefProvider<'_> {
             result
         } else {
             if std::env::var_os("OXIDEAV_H264_REFLIST_TRACE").is_some() {
-                eprintln!("[REFLIST] ref_pic({}, {}) key={} NOT_IN_STORE", list, idx, key);
+                eprintln!(
+                    "[REFLIST] ref_pic({}, {}) key={} NOT_IN_STORE",
+                    list, idx, key
+                );
             }
             Some(fallback_ref_picture())
         }
