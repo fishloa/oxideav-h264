@@ -228,6 +228,15 @@ pub fn parse_slice_data(
                 slice_header.num_ref_idx_l0_active_minus1,
                 c17.state_idx, c17.val_mps);
         }
+        if std::env::var_os("OXIDEAV_H264_CTXINIT_TRACE").is_some() {
+            eprintln!("[CTXINIT] kind={:?} qp_y={} c3=({},{}) c68=({},{}) c399=({},{}) c402=({},{})",
+                kind, slice_qp_y,
+                ctxs.at(3).state_idx, ctxs.at(3).val_mps,
+                ctxs.at(68).state_idx, ctxs.at(68).val_mps,
+                ctxs.at(399).state_idx, ctxs.at(399).val_mps,
+                ctxs.at(402).state_idx, ctxs.at(402).val_mps,
+            );
+        }
 
         // §7.3.4 — prevMbSkipped is initialised to 0; in the CABAC
         // path it is updated each iteration to mb_skip_flag when the
@@ -474,6 +483,7 @@ pub fn parse_slice_data(
                     pic_width_in_mbs: pic_w_mbs,
                     bit_depth_luma_minus8: sps.bit_depth_luma_minus8,
                     bit_depth_chroma_minus8: sps.bit_depth_chroma_minus8,
+                    field_pic_flag: slice_header.field_pic_flag,
                 };
                 let (byte, bit) = r.position();
                 let mb_result =
@@ -492,7 +502,13 @@ pub fn parse_slice_data(
                 drop(entropy);
                 let mut next_qp_delta_flag = next_qp_delta_flag;
                 let mb = match mb_result {
-                    Ok(m) => m,
+                    Ok(m) => {
+                        if curr_mb_addr < 10 && std::env::var_os("OXIDEAV_H264_SLICE_PARSE_TRACE").is_some() {
+                            eprintln!("[SLICE_PARSE] MB {} parsed OK type={:?} range={} offset={}",
+                                curr_mb_addr, m.mb_type, cabac_dec.debug_range(), cabac_dec.debug_offset());
+                        }
+                        m
+                    }
                     Err(MacroblockLayerError::IPcmNeedsCabacReinit {
                         cabac_byte_pos,
                         cabac_bit_pos,
@@ -673,6 +689,10 @@ pub fn parse_slice_data(
                 continue;
             }
             let end = decode_end_of_slice_flag(&mut cabac_dec)?;
+            if std::env::var_os("OXIDEAV_H264_EOS_TRACE").is_some() {
+                eprintln!("[EOS] curr_mb_addr={} end={} range={} offset={}",
+                    curr_mb_addr, end, cabac_dec.debug_range(), cabac_dec.debug_offset());
+            }
             if end {
                 break;
             }
@@ -795,6 +815,7 @@ pub fn parse_slice_data(
                 pic_width_in_mbs: 0,
                 bit_depth_luma_minus8: sps.bit_depth_luma_minus8,
                 bit_depth_chroma_minus8: sps.bit_depth_chroma_minus8,
+                field_pic_flag: slice_header.field_pic_flag,
             };
             let (byte, bit) = r.position();
             let mb = parse_macroblock(&mut r, &mut entropy, slice_header, sps, pps, curr_mb_addr)

@@ -628,6 +628,18 @@ impl H264CodecDecoder {
         let starts_new_picture =
             self.is_first_vcl_of_new_picture(nal_unit_type, nal_ref_idc, &header);
 
+        if std::env::var_os("OXIDEAV_H264_SLICE_TRACE").is_some() {
+            eprintln!(
+                "[SLICE] nut={} ref_idc={} type={:?} frame_num={} field_pic={} bottom_field={} poc_lsb={} first_mb={} new_pic={} t8x8={} cabac_idc={} qp_delta={} fmo={} mbaff_sps={} w_mbs={} h_mus={}",
+                nal_unit_type, nal_ref_idc, header.slice_type, header.frame_num,
+                header.field_pic_flag, header.bottom_field_flag, header.pic_order_cnt_lsb,
+                header.first_mb_in_slice, starts_new_picture, pps.transform_8x8_mode_flag(),
+                header.cabac_init_idc, header.slice_qp_delta,
+                sps.frame_mbs_only_flag, sps.mb_adaptive_frame_field_flag,
+                sps.pic_width_in_mbs_minus1 + 1, sps.pic_height_in_map_units_minus1 + 1,
+            );
+        }
+
         if starts_new_picture {
             // Finalize whatever was in progress before starting the new
             // picture with this slice.
@@ -974,6 +986,11 @@ impl H264CodecDecoder {
         // fuzz oracle on `crash-2ad9589f…` (3 non-IDR slices, all
         // fail "CABAC read past end of bitstream").
         if !in_progress.any_slice_succeeded {
+            if std::env::var_os("OXIDEAV_H264_FINALIZE_TRACE").is_some() {
+                eprintln!("[FINALIZE] DROPPED (no slice succeeded) frame_num={} field_pic={} bottom={} type={:?}",
+                    in_progress.first_header.frame_num, in_progress.first_header.field_pic_flag,
+                    in_progress.first_header.bottom_field_flag, in_progress.first_header.slice_type);
+            }
             return Ok(());
         }
         // §7.4.2.1 / Annex A — a coded picture must cover every
@@ -995,6 +1012,13 @@ impl H264CodecDecoder {
         // slice — total coverage ≪ PicSizeInMbs, leaving most of the
         // luma + chroma planes zero on output.
         if in_progress.grid.info.iter().any(|m| !m.available) {
+            if std::env::var_os("OXIDEAV_H264_FINALIZE_TRACE").is_some() {
+                let total = in_progress.grid.info.len();
+                let avail = in_progress.grid.info.iter().filter(|m| m.available).count();
+                eprintln!("[FINALIZE] DROPPED (incomplete grid) frame_num={} field_pic={} bottom={} type={:?} avail={}/{}",
+                    in_progress.first_header.frame_num, in_progress.first_header.field_pic_flag,
+                    in_progress.first_header.bottom_field_flag, in_progress.first_header.slice_type, avail, total);
+            }
             return Ok(());
         }
         let PictureInProgress {

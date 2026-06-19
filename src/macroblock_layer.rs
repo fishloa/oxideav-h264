@@ -1984,8 +1984,21 @@ fn cbf_cond_for(
     }
 }
 
-/// §9.3.3.1.1.9 — "mbAddrN not available" fallback per Table 9-42:
-/// condTermFlag = 0 when the current MB is inter, 1 when intra.
+/// §9.3.3.1.1.9 — "mbAddrN not available" fallback. When the
+/// neighbouring macroblock is not available (edge of picture / different
+/// slice), condTermFlagN is derived from the **current** macroblock's
+/// intra/inter status **and** the ctxBlockCat of the block being
+/// decoded:
+///
+/// * `currMbIsIntra == 1` and `ctxBlockCat ∈ {0, 1, 2}` (luma DC / AC /
+///   4×4) → condTermFlagN = 1
+/// * `currMbIsIntra == 0` and `ctxBlockCat ∈ {3, 4, 5}` (chroma DC /
+///   AC, or luma 8×8) → condTermFlagN = 1
+/// * Otherwise → condTermFlagN = 0
+///
+/// For 4:4:4 (ChromaArrayType==3) the Cb / Cr plane categories 6-13
+/// are coded "like luma" and map to their luma equivalents (6,7,8→
+/// 0,1,2; 10,11,12→0,1,2; 9,13→5) before applying the rule above.
 ///
 /// Call this ONLY when the neighbouring macroblock itself is unavailable
 /// (edge of picture / different slice). Do NOT use this for the case
@@ -1994,8 +2007,21 @@ fn cbf_cond_for(
 /// (unless mb_type(mbAddrN) = I_PCM, which callers filter earlier). Use
 /// `trans_block_unavail_cbf` for the available-but-no-transblock path.
 #[inline]
-fn unavail_cbf(current_is_intra: bool, _block_type: BlockType) -> bool {
-    current_is_intra
+fn unavail_cbf(current_is_intra: bool, block_type: BlockType) -> bool {
+    let cat = block_type.ctx_block_cat();
+    // Map 4:4:4 Cb/Cr categories to their luma equivalents.
+    let mapped = match cat {
+        6 | 10 => 0,
+        7 | 11 => 1,
+        8 | 12 => 2,
+        9 | 13 => 5,
+        other => other,
+    };
+    if current_is_intra {
+        mapped <= 2
+    } else {
+        mapped >= 3 && mapped <= 5
+    }
 }
 
 /// §9.3.3.1.1.9 — "mbAddrN available but transBlockN not available"
@@ -2159,6 +2185,10 @@ pub struct EntropyState<'ctx, 'data> {
     /// I_PCM macroblock path. Defaults to 0 (BitDepthC = 8) for
     /// non-PCM callers.
     pub bit_depth_chroma_minus8: u32,
+    /// §7.3.3 — `field_pic_flag` of the current slice. When true,
+    /// CABAC residual significance-map context offsets use field-specific
+    /// tables per §9.3.3.1.3 (Table 9-34 rows marked "field").
+    pub field_pic_flag: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -2219,11 +2249,13 @@ pub fn parse_macroblock(
         };
         if dbg_mb_enter_on || dbg_mb_type_all {
             eprintln!(
-                "[MBTYPE {}] raw={} bins_consumed={} slice={:?}",
+                "[MBTYPE {}] raw={} bins_consumed={} slice={:?} range={} offset={}",
                 entropy.current_mb_addr,
                 v,
                 dec.bin_count() - bins_before,
-                slice_type
+                slice_type,
+                dec.debug_range(),
+                dec.debug_offset(),
             );
         }
         v
@@ -2535,6 +2567,7 @@ pub fn parse_macroblock(
         let chroma_at = entropy.chroma_array_type;
         let current_is_intra = mb_type.is_intra();
         let nb_grid = entropy.cabac_nb.as_deref_mut();
+        let field_pic_flag = entropy.field_pic_flag;
         parse_residual_cabac_only(
             cabac,
             ctxs,
@@ -2547,6 +2580,7 @@ pub fn parse_macroblock(
             nb_grid,
             current_mb_addr,
             current_is_intra,
+            field_pic_flag,
         )?;
         // §9.3.3.1.1.* — commit the per-MB syntax state consulted by the
         // NEXT MB's CABAC ctxIdxInc derivations that are not covered by
@@ -2563,6 +2597,14 @@ pub fn parse_macroblock(
                     slot.intra_chroma_pred_mode = pred.intra_chroma_pred_mode;
                 }
             }
+        }
+        if dbg_mb_enter_on {
+            eprintln!(
+                "[MB {}] residual done: range={} offset={}",
+                current_mb_addr,
+                cabac.debug_range(),
+                cabac.debug_offset(),
+            );
         }
     } else {
         parse_residual_cavlc_only(
@@ -3784,6 +3826,7 @@ fn parse_residual_block_cabac(
     chroma_array_type: u32,
     neighbour_cbf_left: Option<bool>,
     neighbour_cbf_above: Option<bool>,
+    field_pic_flag: bool,
 ) -> McblResult<(Vec<i32>, bool)> {
     let len = (end_idx - start_idx + 1) as usize;
     let mut out = vec![0i32; len];
@@ -3813,7 +3856,7 @@ fn parse_residual_block_cabac(
     let mut significant = vec![false; len];
     let span = end_idx - start_idx + 1;
     let mut num_coeff_in_scan = span; // positions 0..num_coeff_in_scan-1 remain
-    let field = false; // frame coding; MBAFF field parsing is deferred
+    let field = field_pic_flag; // field picture → field-specific CABAC context offsets
     let mut i: u32 = 0;
     while i + 1 < num_coeff_in_scan {
         let sig = decode_significant_coeff_flag(cabac, ctxs, block_type, i, field)?;
@@ -3871,6 +3914,7 @@ fn parse_residual_cabac_only(
     nb_grid: Option<&mut CabacNeighbourGrid>,
     current_mb_addr: u32,
     current_is_intra: bool,
+    field_pic_flag: bool,
 ) -> McblResult<()> {
     // Scratch for this MB's accumulating CBF state; committed back to
     // the grid at the end of the function.
@@ -3918,6 +3962,7 @@ fn parse_residual_cabac_only(
             chroma_array_type,
             ca,
             cb,
+            field_pic_flag,
         )?;
         curr_cbf.cbf_luma_16x16_dc = coded;
         out.residual_luma_dc = Some(pad_to_16(blk));
@@ -3951,6 +3996,7 @@ fn parse_residual_cabac_only(
                     chroma_array_type,
                     ca,
                     cb,
+                field_pic_flag,
                 )?;
                 curr_cbf.cbf_luma_16x16_ac[blk_idx as usize] = coded;
                 out.residual_luma.push(pad_to_16(blk));
@@ -3971,6 +4017,7 @@ fn parse_residual_cabac_only(
                     chroma_array_type,
                     None,
                     None,
+                    field_pic_flag,
                 )?;
                 // Propagate the inferred coded flag to the four 4x4
                 // sub-blocks for CBF neighbour tracking.
@@ -4017,6 +4064,7 @@ fn parse_residual_cabac_only(
                         chroma_array_type,
                         ca,
                         cb,
+                field_pic_flag,
                     )?;
                     curr_cbf.cbf_luma_4x4[blk_idx as usize] = coded;
                     out.residual_luma.push(pad_to_16(blk));
@@ -4058,6 +4106,7 @@ fn parse_residual_cabac_only(
                 chroma_array_type,
                 ca_cb,
                 cb_cb,
+                field_pic_flag,
             )?;
             curr_cbf.cbf_cb_dc = cb_coded;
             out.residual_chroma_dc_cb = cb_dc;
@@ -4086,6 +4135,7 @@ fn parse_residual_cabac_only(
                 chroma_array_type,
                 ca_cr,
                 cb_cr,
+                field_pic_flag,
             )?;
             curr_cbf.cbf_cr_dc = cr_coded;
             out.residual_chroma_dc_cr = cr_dc;
@@ -4118,6 +4168,7 @@ fn parse_residual_cabac_only(
                     chroma_array_type,
                     ca,
                     cb,
+                field_pic_flag,
                 )?;
                 curr_cbf.cbf_cb_ac[blk_idx as usize] = coded;
                 out.residual_chroma_ac_cb.push(pad_to_16(blk));
@@ -4147,6 +4198,7 @@ fn parse_residual_cabac_only(
                     chroma_array_type,
                     ca,
                     cb,
+                field_pic_flag,
                 )?;
                 curr_cbf.cbf_cr_ac[blk_idx as usize] = coded;
                 out.residual_chroma_ac_cr.push(pad_to_16(blk));
@@ -4203,6 +4255,7 @@ fn parse_residual_cabac_only(
                     chroma_array_type,
                     ca,
                     cb,
+                field_pic_flag,
                 )?;
                 if plane_is_cr {
                     curr_cbf.cbf_cr_16x16_dc = coded;
@@ -4241,6 +4294,7 @@ fn parse_residual_cabac_only(
                             chroma_array_type,
                             ca,
                             cb,
+                field_pic_flag,
                         )?;
                         if plane_is_cr {
                             curr_cbf.cbf_cr_16x16_ac[blk_idx as usize] = coded;
@@ -4268,6 +4322,7 @@ fn parse_residual_cabac_only(
                             chroma_array_type,
                             None,
                             None,
+                            field_pic_flag,
                         )?;
                         // Propagate coded flag to the four 4x4 sub-
                         // blocks so subsequent intra-MB neighbour
@@ -4322,6 +4377,7 @@ fn parse_residual_cabac_only(
                                 chroma_array_type,
                                 ca,
                                 cb,
+                field_pic_flag,
                             )?;
                             if plane_is_cr {
                                 curr_cbf.cbf_cr_luma_4x4[blk_idx as usize] = coded;
@@ -4674,6 +4730,7 @@ mod tests {
             pic_width_in_mbs: 0,
             bit_depth_luma_minus8: 0,
             bit_depth_chroma_minus8: 0,
+            field_pic_flag: false,
         }
     }
 
@@ -5905,6 +5962,7 @@ mod tests {
             pic_width_in_mbs: 0,
             bit_depth_luma_minus8: 0,
             bit_depth_chroma_minus8: 0,
+            field_pic_flag: false,
         };
         let pred = parse_mb_pred(&mut r, &mut entropy, mb_type, false).unwrap();
         let bins_used = dec.bin_count() - bins_before;
@@ -6223,6 +6281,7 @@ mod tests {
             pic_width_in_mbs: 0,
             bit_depth_luma_minus8: 0,
             bit_depth_chroma_minus8: 0,
+            field_pic_flag: false,
         };
         let pred = parse_sub_mb_pred(&mut r, &mut entropy, mb_type).unwrap();
         let bins_used = dec.bin_count() - bins_before;
@@ -6357,6 +6416,7 @@ mod tests {
             pic_width_in_mbs: 0,
             bit_depth_luma_minus8: 0,
             bit_depth_chroma_minus8: 0,
+            field_pic_flag: false,
         }
     }
 
@@ -6622,6 +6682,7 @@ mod tests {
             &mut dec, &mut ctxs, /*chroma_array_type=*/ 3, &mb_type, /*cbp_luma=*/ 0,
             /*cbp_chroma=*/ 0, /*transform_size_8x8_flag=*/ false, &mut out,
             /*nb_grid=*/ None, /*current_mb_addr=*/ 0, /*current_is_intra=*/ true,
+            /*field_pic_flag=*/ false,
         );
         // The 4:4:4 branch must return Ok (possibly with all-zero
         // residual blocks) — NOT UnsupportedChromaArrayType.

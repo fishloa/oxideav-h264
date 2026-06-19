@@ -2626,7 +2626,7 @@ pub enum BlockType {
 }
 
 impl BlockType {
-    fn ctx_block_cat(self) -> u32 {
+    pub fn ctx_block_cat(self) -> u32 {
         self as u32
     }
 
