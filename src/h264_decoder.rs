@@ -1459,7 +1459,7 @@ impl H264CodecDecoder {
         // Guard against a runaway loop from a bogus `current_frame_num`;
         // the spec allows up to MaxFrameNum iterations.
         let mut iterations: u32 = 0;
-        while expected != current_frame_num && iterations < max_frame_num {
+        while expected != current_mod && iterations < max_frame_num {
             // §8.2.5.2 — a neutral placeholder picture. Samples are
             // mid-grey (2^(bit_depth-1)) because the spec only guarantees
             // "not available for prediction"; mid-grey keeps any

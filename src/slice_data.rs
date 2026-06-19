@@ -724,6 +724,19 @@ pub fn parse_slice_data(
             if curr_mb_addr > MB_HARD_CAP {
                 return Err(SliceDataError::MbAddrOverflow(pic_size_in_mbs));
             }
+            // Per-slice cap: a conformant slice covers at most
+            // PicSizeInMbs macroblocks.  If CABAC desync causes
+            // end_of_slice_flag to never fire, terminate at
+            // PicSizeInMbs to avoid a runaway hang.
+            if curr_mb_addr >= pic_size_in_mbs {
+                break;
+            }
+            // Secondary cap: if the CABAC engine has consumed an
+            // unreasonable number of bins (> 200 per MB × pic_size),
+            // the stream is desynchronized — terminate early.
+            if cabac_dec.bin_count() > (pic_size_in_mbs as u64) * 200 {
+                break;
+            }
         }
     } else {
         // ---------------------------------------------------------
