@@ -807,7 +807,7 @@ impl H264CodecDecoder {
 
         if std::env::var_os("OXIDEAV_H264_REFLIST_TRACE").is_some() {
             eprintln!(
-                "[REFLIST] slice type={:?} frame_num={} field_pic={} bottom={} dpb_entries={} gaps_allowed={} prev_ref={:?}",
+                "[REFLIST] slice type={:?} frame_num={} field_pic={} bottom={} dpb_entries={} gaps_allowed={} prev_ref={:?} num_active_l0={} num_active_l1={}",
                 header.slice_type,
                 header.frame_num,
                 header.field_pic_flag,
@@ -815,6 +815,8 @@ impl H264CodecDecoder {
                 self.dpb_entries.len(),
                 sps.gaps_in_frame_num_value_allowed_flag,
                 self.prev_ref_frame_num,
+                header.num_ref_idx_l0_active_minus1 + 1,
+                header.num_ref_idx_l1_active_minus1 + 1,
             );
         }
 
@@ -1593,6 +1595,21 @@ struct BorrowedRefProvider<'a> {
     list_1_longterm: Vec<bool>,
 }
 
+/// Fallback neutral reference picture used when a reference index is
+/// out-of-bounds or the DPB key doesn't resolve.  1920×1088, 8-bit
+/// 4:2:0, mid-gray (luma=128, chroma=128).  Stored once per process.
+fn fallback_ref_picture() -> &'static Picture {
+    use std::sync::OnceLock;
+    static PIC: OnceLock<Picture> = OnceLock::new();
+    PIC.get_or_init(|| {
+        let mut p = Picture::new(1920, 1088, 1, 8, 8);
+        p.luma.fill(128);
+        p.cb.fill(128);
+        p.cr.fill(128);
+        p
+    })
+}
+
 impl RefPicProvider for BorrowedRefProvider<'_> {
     fn ref_pic(&self, list: u8, idx: u32) -> Option<&Picture> {
         let keys = match list {
@@ -1600,8 +1617,29 @@ impl RefPicProvider for BorrowedRefProvider<'_> {
             1 => self.list_1,
             _ => return None,
         };
-        let key = *keys.get(idx as usize)?;
-        self.store.get_by_key(key)
+        let key = match keys.get(idx as usize) {
+            Some(k) => *k,
+            None => {
+                if std::env::var_os("OXIDEAV_H264_REFLIST_TRACE").is_some() {
+                    eprintln!(
+                        "[REFLIST] ref_pic({}, {}) OUT_OF_BOUNDS len_0={} len_1={}",
+                        list, idx, self.list_0.len(), self.list_1.len()
+                    );
+                }
+                // Fall back to a neutral gray picture so reconstruction
+                // can continue instead of returning an error.
+                return Some(fallback_ref_picture());
+            }
+        };
+        let result = self.store.get_by_key(key);
+        if result.is_some() {
+            result
+        } else {
+            if std::env::var_os("OXIDEAV_H264_REFLIST_TRACE").is_some() {
+                eprintln!("[REFLIST] ref_pic({}, {}) key={} NOT_IN_STORE", list, idx, key);
+            }
+            Some(fallback_ref_picture())
+        }
     }
 
     fn ref_list_0_pocs(&self) -> &[i32] {

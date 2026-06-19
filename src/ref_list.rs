@@ -492,6 +492,12 @@ pub fn modify_ref_pic_list(
             }
         }
     }
+    // Ensure the list has at least `num_active` entries.  Entries that
+    // were not resolved by RPLM ops keep their sentinel (u32::MAX)
+    // values; callers must handle those gracefully.
+    while list.len() < target {
+        list.push(u32::MAX);
+    }
 }
 
 /// Common helper for §8.2.4.3.1 eq. 8-37 and §8.2.4.3.2 eq. 8-38 —
