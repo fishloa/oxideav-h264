@@ -267,8 +267,17 @@ fn derive_type0(
     // slice). Non-reference pictures do not update the POC anchor.
     if slice.is_reference {
         state.prev_pic_order_cnt_msb = pic_order_cnt_msb;
-        // eq. 8-3 consumes `pic_order_cnt_lsb` directly, so store it.
-        state.prev_pic_order_cnt_lsb = slice.pic_order_cnt_lsb;
+        // §8.2.1.1 — for a complementary field pair (top + bottom of
+        // the same frame_num), prevPicOrderCntLsb should be the TOP
+        // field's lsb (the first field of the pair).  When the bottom
+        // field has the same frame_num as the previous reference, it's
+        // the second field of a pair — don't overwrite prev_lsb.
+        let is_second_field_of_pair = slice.field_pic_flag
+            && slice.bottom_field_flag
+            && state.prev_frame_num == slice.frame_num;
+        if !is_second_field_of_pair {
+            state.prev_pic_order_cnt_lsb = slice.pic_order_cnt_lsb;
+        }
     }
     state.prev_frame_num = slice.frame_num;
 
