@@ -3837,6 +3837,11 @@ fn parse_residual_block_cabac(
 ) -> McblResult<(Vec<i32>, bool)> {
     let len = (end_idx - start_idx + 1) as usize;
     let mut out = vec![0i32; len];
+    let trace_block = std::env::var_os("OXIDEAV_H264_TRACE_BLOCK").is_some();
+    let bins_before = if trace_block { cabac.bin_count() } else { 0 };
+    // Walk up the stack to find current_mb_addr — it's passed through
+    // parse_residual_cabac_only which has it as a parameter.
+    // We'll just print the bin count so the caller can correlate.
 
     // §7.3.5.3.3 — coded_block_flag is suppressed for 8x8 blocks unless
     // we're in 4:4:4 (where 8x8 CBP semantics differ).
@@ -3901,6 +3906,16 @@ fn parse_residual_block_cabac(
         } else {
             num_gt1 += 1;
         }
+    }
+    if trace_block {
+        let bins_after = cabac.bin_count();
+        eprintln!(
+            "[BLOCK] bt={:?} coded={} consumed={} cumul={} r={} o={}",
+            block_type, coded,
+            bins_after - bins_before,
+            bins_after,
+            cabac.debug_range(), cabac.debug_offset(),
+        );
     }
     Ok((out, true))
 }
