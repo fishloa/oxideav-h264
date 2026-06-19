@@ -3856,7 +3856,7 @@ fn parse_residual_block_cabac(
     let mut significant = vec![false; len];
     let span = end_idx - start_idx + 1;
     let mut num_coeff_in_scan = span; // positions 0..num_coeff_in_scan-1 remain
-    let field = field_pic_flag; // field picture → field-specific CABAC context offsets
+    let field = false; // field_pic_flag; // PAFF field offsets deferred until init tables complete
     let mut i: u32 = 0;
     while i + 1 < num_coeff_in_scan {
         let sig = decode_significant_coeff_flag(cabac, ctxs, block_type, i, field)?;
