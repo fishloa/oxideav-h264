@@ -2230,6 +2230,25 @@ pub fn parse_macroblock(
     let trace_mb_range = std::env::var_os("OXIDEAV_H264_TRACE_MB_RANGE").is_some()
         && (40..=46).contains(&entropy.current_mb_addr);
     let dbg_mb_type_all = dbg_mbtype_trace_enabled() || trace_mb_range;
+
+    // Helper to dump CABAC state at a trace point
+    macro_rules! trace_elem {
+        ($label:expr) => {
+            if trace_mb_range {
+                if let Some((dec, _)) = entropy.cabac.as_ref() {
+                    eprintln!(
+                        "[MB {}] {} range={} offset={} bins={}",
+                        entropy.current_mb_addr,
+                        $label,
+                        dec.debug_range(),
+                        dec.debug_offset(),
+                        dec.bin_count(),
+                    );
+                }
+            }
+        };
+    }
+    trace_elem!("BEFORE mb_type");
     let mb_type_raw = if let Some((dec, ctxs)) = entropy.cabac.as_mut() {
         let bins_before = dec.bin_count();
         let v = match slice_type {
@@ -2252,13 +2271,7 @@ pub fn parse_macroblock(
     } else {
         r.ue()?
     };
-    if dbg {
-        let (b, bi) = r.position();
-        eprintln!(
-            "[MB {:>4}]   after mb_type raw={} cursor=({},{})",
-            mb_addr_dbg, mb_type_raw, b, bi
-        );
-    }
+    trace_elem!("AFTER mb_type");
 
     let mb_type = match slice_type {
         SliceType::I | SliceType::SI => MbType::from_i_slice(mb_type_raw)?,
@@ -2370,6 +2383,7 @@ pub fn parse_macroblock(
     let mut mb_pred: Option<MbPred> = None;
     let mut sub_mb_pred: Option<SubMbPred> = None;
     let mut transform_size_8x8_flag = false;
+    trace_elem!("BEFORE mb_pred");
 
     if mb_type.is_sub_mb_path() {
         sub_mb_pred = Some(parse_sub_mb_pred(r, entropy, &mb_type)?);
@@ -2396,6 +2410,7 @@ pub fn parse_macroblock(
             mb_addr_dbg, mb_type, b, bi
         );
     }
+    trace_elem!("AFTER mb_pred");
 
     // ---------------------------------------------------------------
     // §7.3.5 — coded_block_pattern when mb_type != Intra_16x16.
@@ -2403,6 +2418,7 @@ pub fn parse_macroblock(
     let cbp_luma: u32;
     let cbp_chroma: u32;
     let cbp_total: u32;
+    trace_elem!("BEFORE CBP");
     if let Some(i16) = mb_type.intra_16x16_cbp_luma() {
         cbp_luma = i16 as u32;
         cbp_chroma = mb_type.intra_16x16_cbp_chroma().unwrap_or(0) as u32;
@@ -2438,6 +2454,7 @@ pub fn parse_macroblock(
             mb_addr_dbg, cbp_total, cbp_luma, cbp_chroma, b, bi
         );
     }
+    trace_elem!("AFTER CBP");
 
     // ---------------------------------------------------------------
     // §7.3.5 — transform_size_8x8_flag (second gate, for non-I_NxN).
@@ -2492,6 +2509,7 @@ pub fn parse_macroblock(
     // Intra_16x16 mb_type are present.
     // ---------------------------------------------------------------
     let needs_qp_delta = cbp_luma > 0 || cbp_chroma > 0 || mb_type.is_intra_16x16();
+    trace_elem!("BEFORE qp_delta");
     let mb_qp_delta = if needs_qp_delta {
         if let Some((dec, ctxs)) = entropy.cabac.as_mut() {
             let bins_before = dec.bin_count();
@@ -2514,6 +2532,7 @@ pub fn parse_macroblock(
         0
     };
     entropy.prev_mb_qp_delta_nonzero = mb_qp_delta != 0;
+    trace_elem!("AFTER qp_delta");
     if dbg {
         let (b, bi) = r.position();
         eprintln!(
@@ -2550,6 +2569,7 @@ pub fn parse_macroblock(
 
     // §7.3.5.3 — residual block = residual_block_cavlc or
     // residual_block_cabac depending on entropy_coding_mode_flag.
+    trace_elem!("BEFORE residual");
     if let Some((cabac, ctxs)) = entropy.cabac.as_mut() {
         // Split the borrow: `cabac` and `cabac_nb` are both fields of
         // `entropy` but we need both mutably in the residual walker.
@@ -2588,14 +2608,7 @@ pub fn parse_macroblock(
                 }
             }
         }
-        if dbg_mb_enter_on {
-            eprintln!(
-                "[MB {}] residual done: range={} offset={}",
-                current_mb_addr,
-                cabac.debug_range(),
-                cabac.debug_offset(),
-            );
-        }
+        trace_elem!("AFTER residual");
     } else {
         parse_residual_cavlc_only(
             r,
