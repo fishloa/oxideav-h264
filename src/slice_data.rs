@@ -181,10 +181,14 @@ pub fn parse_slice_data(
     // can re-use the same store.
     let pic_w_mbs = sps.pic_width_in_mbs_minus1 + 1;
     let pic_h_mus = sps.pic_height_in_map_units_minus1 + 1;
-    let pic_h_mbs = if sps.frame_mbs_only_flag {
-        pic_h_mus
-    } else {
+    // §7.4.2.1.1 eq. 7-26/7-28: PicHeightInMbs.
+    //   frame_mbs_only_flag=1  → frame picture → PicHeightInMbs = PicHeightInMapUnits
+    //   frame_mbs_only_flag=0, field_pic_flag=1 → field picture → PicHeightInMbs = PicHeightInMapUnits
+    //   frame_mbs_only_flag=0, field_pic_flag=0 → MBAFF frame  → PicHeightInMbs = PicHeightInMapUnits * 2
+    let pic_h_mbs = if !sps.frame_mbs_only_flag && !slice_header.field_pic_flag {
         pic_h_mus * 2
+    } else {
+        pic_h_mus
     };
     // §7.4.2.1.1 eq. 7-25: PicSizeInMbs = PicWidthInMbs * FrameHeightInMbs.
     // Both terms are u32 capped by SPS (`MAX_PIC_DIM_IN_MBS_MINUS1 + 1`),

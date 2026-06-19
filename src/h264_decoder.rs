@@ -556,6 +556,12 @@ impl H264CodecDecoder {
         if prev.field_pic_flag != header.field_pic_flag {
             return true;
         }
+        // PAFF (§7.4.1.2.4): when field_pic_flag is true, bottom_field_flag
+        // distinguishes top-field vs bottom-field coded pictures that share
+        // the same frame_num. A change in field parity starts a new picture.
+        if prev.bottom_field_flag != header.bottom_field_flag {
+            return true;
+        }
         if prev_is_ref != curr_is_ref {
             return true;
         }
@@ -684,7 +690,12 @@ impl H264CodecDecoder {
                 .map_err(|e| Error::invalid(format!("h264 POC: {e:?}")))?;
 
             let width_samples = sps.pic_width_in_mbs() * 16;
-            let height_samples = sps.frame_height_in_mbs() * 16;
+            // §7.4.2.1.1 — FrameHeightInMbs = (2 - frame_mbs_only_flag) * PicHeightInMapUnits.
+            // For field pictures (field_pic_flag=1) the picture height is half the frame height
+            // per eq. (7-28): PicHeightInMbs = FrameHeightInMbs / (1 + field_pic_flag).
+            let pic_height_in_mbs =
+                sps.frame_height_in_mbs() / (1 + u32::from(header.field_pic_flag));
+            let height_samples = pic_height_in_mbs * 16;
             let chroma_array_type = sps.chroma_array_type();
             let pic = Picture::new(
                 width_samples,
@@ -693,7 +704,7 @@ impl H264CodecDecoder {
                 sps.bit_depth_luma_minus8 + 8,
                 sps.bit_depth_chroma_minus8 + 8,
             );
-            let grid = MbGrid::new(sps.pic_width_in_mbs(), sps.frame_height_in_mbs());
+            let grid = MbGrid::new(sps.pic_width_in_mbs(), pic_height_in_mbs);
             let structure =
                 pic_structure_from_flags(header.field_pic_flag, header.bottom_field_flag);
 
@@ -705,7 +716,7 @@ impl H264CodecDecoder {
             let deblock_enabled = header.disable_deblocking_filter_idc != 1;
             let deblock_alpha_off = header.slice_alpha_c0_offset_div2 * 2;
             let deblock_beta_off = header.slice_beta_offset_div2 * 2;
-            let mb_count = (sps.pic_width_in_mbs() * sps.frame_height_in_mbs()) as usize;
+            let mb_count = (sps.pic_width_in_mbs() * pic_height_in_mbs) as usize;
             let mb_field_flags = vec![false; mb_count];
 
             self.in_progress = Some(PictureInProgress {
