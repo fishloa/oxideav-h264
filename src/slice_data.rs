@@ -229,12 +229,13 @@ pub fn parse_slice_data(
                 c17.state_idx, c17.val_mps);
         }
         if std::env::var_os("OXIDEAV_H264_CTXINIT_TRACE").is_some() {
-            eprintln!("[CTXINIT] kind={:?} qp_y={} c3=({},{}) c68=({},{}) c399=({},{}) c402=({},{})",
+            eprintln!("[CTXINIT] kind={:?} qp_y={} c3=({},{}) c68=({},{}) c399=({},{}) c402=({},{}) c277=({},{})",
                 kind, slice_qp_y,
                 ctxs.at(3).state_idx, ctxs.at(3).val_mps,
                 ctxs.at(68).state_idx, ctxs.at(68).val_mps,
                 ctxs.at(399).state_idx, ctxs.at(399).val_mps,
                 ctxs.at(402).state_idx, ctxs.at(402).val_mps,
+                ctxs.at(277).state_idx, ctxs.at(277).val_mps,
             );
         }
 

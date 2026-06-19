@@ -182,6 +182,9 @@ pub struct H264CodecDecoder {
     pending_time_base: TimeBase,
 
     // ---- DPB / cross-picture state (§8.2.1 / §8.2.4 / §8.2.5) -------
+    /// §8.7.2 — buffered top field waiting for its complementary
+    /// bottom field for PAFF weaving. `(frame_num, top_vf, output_poc)`.
+    pending_top_field: Option<(u32, VideoFrame, i32)>,
     /// Long-lived decoded picture store. Holds reconstructed Pictures
     /// by DPB slot key. The per-slice ref_pic_list_0 / _1 arrays are
     /// repopulated for every slice via `set_list_0` / `set_list_1`.
@@ -256,6 +259,7 @@ impl H264CodecDecoder {
             ready: VecDeque::new(),
             pending_pts: None,
             pending_time_base: TimeBase::new(1, 1),
+            pending_top_field: None,
             ref_store: RefPicStore::new(),
             dpb_entries: Vec::new(),
             poc_state: PocState::default(),
@@ -1241,18 +1245,81 @@ impl H264CodecDecoder {
         // VideoFrames (the pixel regions beyond the decoded MBs are
         // zero-initialised and would corrupt PSNR).
         if grid_complete {
+            if first_header.field_pic_flag {
+                // PAFF field weaving: pair top+bottom fields of the
+                // same frame_num into a full-height frame.
+                if first_header.bottom_field_flag {
+                    if let Some((bid_fnum, top_vf, top_poc)) = self.pending_top_field.take() {
+                        if bid_fnum == first_header.frame_num {
+                            let woven = weave_field_pair(&top_vf, &vf, first_header.frame_num);
+                            let entry = OutputEntry {
+                                picture: woven,
+                                pic_order_cnt: top_poc.min(output_poc),
+                                frame_num: first_header.frame_num,
+                                needed_for_output: true,
+                            };
+                            if let Some(bumped) = self.output_dpb.push(entry) {
+                                self.ready.push_back(bumped.picture);
+                            }
+                        } else {
+                            // Stale pending top: flush it, then push bottom as-is.
+                            self.flush_pending_top_field();
+                            let entry = OutputEntry {
+                                picture: vf,
+                                pic_order_cnt: output_poc,
+                                frame_num: first_header.frame_num,
+                                needed_for_output: true,
+                            };
+                            if let Some(bumped) = self.output_dpb.push(entry) {
+                                self.ready.push_back(bumped.picture);
+                            }
+                        }
+                    } else {
+                        // No pending top: push bottom field as-is.
+                        let entry = OutputEntry {
+                            picture: vf,
+                            pic_order_cnt: output_poc,
+                            frame_num: first_header.frame_num,
+                            needed_for_output: true,
+                        };
+                        if let Some(bumped) = self.output_dpb.push(entry) {
+                            self.ready.push_back(bumped.picture);
+                        }
+                    }
+                } else {
+                    // Top field: flush stale, then buffer.
+                    self.flush_pending_top_field();
+                    self.pending_top_field = Some((first_header.frame_num, vf, output_poc));
+                }
+            } else {
+                // Frame picture: emit directly.
+                let entry = OutputEntry {
+                    picture: vf,
+                    pic_order_cnt: output_poc,
+                    frame_num: first_header.frame_num,
+                    needed_for_output: true,
+                };
+                if let Some(bumped) = self.output_dpb.push(entry) {
+                    self.ready.push_back(bumped.picture);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn flush_pending_top_field(&mut self) {
+        if let Some((fnum, vf, poc)) = self.pending_top_field.take() {
             let entry = OutputEntry {
                 picture: vf,
-                pic_order_cnt: output_poc,
-                frame_num: first_header.frame_num,
+                pic_order_cnt: poc,
+                frame_num: fnum,
                 needed_for_output: true,
             };
             if let Some(bumped) = self.output_dpb.push(entry) {
                 self.ready.push_back(bumped.picture);
             }
         }
-
-        Ok(())
     }
 
     /// Resize the output DPB capacity from the active SPS's VUI
@@ -1766,6 +1833,20 @@ impl Decoder for H264CodecDecoder {
         if let Err(e) = self.finalize_in_progress_picture() {
             eprintln!("h264 flush: final picture skipped: {e}");
         }
+        // Flush any unpaired top field (PAFF streams where the final
+        // field has no complement).  Push it through the output DPB
+        // so `receive_frame` can deliver it.
+        if let Some((_fnum, vf, poc)) = self.pending_top_field.take() {
+            let entry = OutputEntry {
+                picture: vf,
+                pic_order_cnt: poc,
+                frame_num: _fnum,
+                needed_for_output: true,
+            };
+            if let Some(bumped) = self.output_dpb.push(entry) {
+                self.ready.push_back(bumped.picture);
+            }
+        }
         self.eof = true;
         Ok(())
     }
@@ -1905,6 +1986,43 @@ fn picture_to_video_frame(pic: &Picture, pts: Option<i64>) -> VideoFrame {
     }
 
     VideoFrame { pts, planes }
+}
+
+/// §8.7.2 — weave a top-field and bottom-field VideoFrame (each at
+/// half height) into a full-height progressive frame.  The top field's
+/// rows populate even-numbered output rows starting at y=0; the bottom
+/// field populates odd-numbered rows starting at y=1.
+fn weave_field_pair(
+    top: &VideoFrame,
+    bottom: &VideoFrame,
+    _frame_num: u32,
+) -> VideoFrame {
+    assert_eq!(top.planes.len(), bottom.planes.len());
+    let planes: Vec<VideoPlane> = top
+        .planes
+        .iter()
+        .zip(bottom.planes.iter())
+        .map(|(t, b)| {
+            assert_eq!(t.stride, b.stride);
+            let stride = t.stride;
+            let single_h = t.data.len() / t.stride;
+            let full_h = single_h * 2;
+            let mut data = vec![0u8; full_h * stride];
+            for row in 0..single_h {
+                let top_row = &t.data[row * stride..(row + 1) * stride];
+                let bot_row = &b.data[row * stride..(row + 1) * stride];
+                data[row * 2 * stride..row * 2 * stride + stride]
+                    .copy_from_slice(top_row);
+                data[(row * 2 + 1) * stride..(row * 2 + 2) * stride]
+                    .copy_from_slice(bot_row);
+            }
+            VideoPlane { stride, data }
+        })
+        .collect();
+    VideoFrame {
+        pts: top.pts,
+        planes,
+    }
 }
 
 #[cfg(test)]
