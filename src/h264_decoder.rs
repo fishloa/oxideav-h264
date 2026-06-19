@@ -1272,8 +1272,43 @@ impl H264CodecDecoder {
             // PAFF field weaving: pair top+bottom fields of the
             // same frame_num into a full-height frame.
             if first_header.bottom_field_flag {
+                if std::env::var_os("OXIDEAV_H264_WEAVE_TRACE").is_some() {
+                    eprintln!(
+                        "[WEAVE] bottom field frame_num={} poc={} has_pending={}",
+                        first_header.frame_num,
+                        output_poc,
+                        self.pending_top_field.is_some(),
+                    );
+                }
                 if let Some((bid_fnum, top_vf, top_poc)) = self.pending_top_field.take() {
-                    if bid_fnum == first_header.frame_num {
+                    let matched = bid_fnum == first_header.frame_num;
+                    if std::env::var_os("OXIDEAV_H264_WEAVE_TRACE").is_some() {
+                        eprintln!(
+                            "[WEAVE] bottom frame_num={} pending_fn={} matched={} top_h={} bot_h={}",
+                            first_header.frame_num,
+                            bid_fnum,
+                            matched,
+                            top_vf.planes.first().map(|p| p.data.len() / p.stride).unwrap_or(0),
+                            vf.planes.first().map(|p| p.data.len() / p.stride).unwrap_or(0),
+                        );
+                    }
+                    if matched {
+                        if std::env::var_os("OXIDEAV_H264_WEAVE_TRACE").is_some() {
+                            eprintln!(
+                                "[WEAVE] weaving fn={} h={}→{}",
+                                bid_fnum,
+                                top_vf
+                                    .planes
+                                    .first()
+                                    .map(|p| p.data.len() / p.stride)
+                                    .unwrap_or(0),
+                                2 * top_vf
+                                    .planes
+                                    .first()
+                                    .map(|p| p.data.len() / p.stride)
+                                    .unwrap_or(0)
+                            );
+                        }
                         let woven = weave_field_pair(&top_vf, &vf, first_header.frame_num);
                         let entry = OutputEntry {
                             picture: woven,

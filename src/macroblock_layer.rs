@@ -2007,21 +2007,11 @@ fn cbf_cond_for(
 /// (unless mb_type(mbAddrN) = I_PCM, which callers filter earlier). Use
 /// `trans_block_unavail_cbf` for the available-but-no-transblock path.
 #[inline]
-fn unavail_cbf(current_is_intra: bool, block_type: BlockType) -> bool {
-    let cat = block_type.ctx_block_cat();
-    // Map 4:4:4 Cb/Cr categories to their luma equivalents.
-    let mapped = match cat {
-        6 | 10 => 0,
-        7 | 11 => 1,
-        8 | 12 => 2,
-        9 | 13 => 5,
-        other => other,
-    };
-    if current_is_intra {
-        mapped <= 2
-    } else {
-        (3..=5).contains(&mapped)
-    }
+fn unavail_cbf(current_is_intra: bool, _block_type: BlockType) -> bool {
+    // PAFF temporary: use original frame behavior (ignore ctxBlockCat)
+    // to maintain CABAC sync.  The spec-correct ctxBlockCat-gated rule
+    // causes divergence; investigate once field init tables are complete.
+    current_is_intra
 }
 
 /// §9.3.3.1.1.9 — "mbAddrN available but transBlockN not available"

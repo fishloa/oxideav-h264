@@ -1880,19 +1880,22 @@ impl CabacContexts {
         };
         // PAFF field-specific context ranges (277-336 for sig_coeff_flag
         // field, 338-399 for last_coeff_flag field) are not yet populated
-        // in the init table.  Bootstrap them from the corresponding
-        // frame-range init values (105-166, 166-227) so the arithmetic
-        // engine starts synchronised.  This is a stopgap until the
-        // full field init tables (TBL_9_20/21/22) are imported.
-        for src_base in [105u32, 166] {
-            let dst_base = if src_base == 105 { 277 } else { 338 };
-            for off in 0..62u32 {
-                let src = (src_base + off) as usize;
-                let dst = (dst_base + off) as usize;
-                if ctx[src].state_idx != 0 || ctx[src].val_mps != 0 {
-                    ctx[dst] = ctx[src];
-                }
-            }
+        // in the init table.  Re-initialise them neutrally (pStateIdx=63,
+        // valMPS=0 — the non-adapting terminate state) rather than
+        // bootstrapping from frame ranges (which would overwrite contexts
+        // 396-401 that belong to intra_chroma_pred_mode and
+        // transform_size_8x8_flag).
+        for slot in ctx.iter_mut().take(336).skip(277) {
+            *slot = CtxState {
+                state_idx: 63,
+                val_mps: 0,
+            };
+        }
+        for slot in ctx.iter_mut().take(396).skip(338) {
+            *slot = CtxState {
+                state_idx: 63,
+                val_mps: 0,
+            };
         }
         Ok(Self {
             contexts: ctx,

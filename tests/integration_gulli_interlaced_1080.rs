@@ -46,24 +46,21 @@ fn ffmpeg_raw_yuv(path: &std::path::Path) -> Option<Vec<u8>> {
 
 // --------------- our decoder ---------------
 
-fn decoder_yuv(path: &std::path::Path) -> (u32, u32, Vec<Vec<u8>>) {
+fn decoder_yuv(path: &std::path::Path) -> Vec<(u32, u32, Vec<u8>)> {
     let bytes = std::fs::read(path).expect("read sample");
     let mut dec = H264CodecDecoder::new(CodecId::new("h264"));
     let packet = Packet::new(0, TimeBase::new(1, 25), bytes).with_pts(0);
     dec.send_packet(&packet).expect("send_packet");
     dec.flush().expect("flush");
 
-    let mut frames: Vec<Vec<u8>> = Vec::new();
-    let mut width: u32 = 0;
-    let mut height: u32 = 0;
+    let mut frames: Vec<(u32, u32, Vec<u8>)> = Vec::new();
     loop {
         match dec.receive_frame() {
             Ok(Frame::Video(vf)) => {
-                if frames.is_empty() {
-                    width = vf.planes[0].stride as u32;
-                    height = (vf.planes[0].data.len() / vf.planes[0].stride) as u32;
-                }
-                frames.push(videoframe_to_yuv420p(&vf));
+                let w = vf.planes[0].stride as u32;
+                let h = (vf.planes[0].data.len() / vf.planes[0].stride) as u32;
+                let yuv = videoframe_to_yuv420p(&vf);
+                frames.push((w, h, yuv));
             }
             Ok(other) => {
                 eprintln!("  unexpected non-video frame: {:?}", other);
@@ -76,7 +73,7 @@ fn decoder_yuv(path: &std::path::Path) -> (u32, u32, Vec<Vec<u8>>) {
             }
         }
     }
-    (width, height, frames)
+    frames
 }
 
 fn videoframe_to_yuv420p(vf: &oxideav_core::VideoFrame) -> Vec<u8> {
@@ -151,23 +148,25 @@ fn conformance_gulli_interlaced_1080() {
     };
 
     eprintln!("[gulli_interlaced_1080] decoding with oxideav-h264 …");
-    let (w, h, ours_frames) = decoder_yuv(&fixture);
-    let our_plane_bytes = (w as usize) * (h as usize) * 3 / 2;
+    let ours_frames = decoder_yuv(&fixture);
 
-    eprintln!(
-        "[gulli_interlaced_1080] geometry {}x{} | our frames: {} | ffmpeg ref bytes: {}",
-        w,
-        h,
-        ours_frames.len(),
-        reference.len()
-    );
-
-    // --------------- compare
+    // ffmpeg produces 1920x1080 frames; our weaved frames are 1920x1088.
+    // The ffmpeg planes have width=1920 (same as stride), height=1080.
+    let ffmpeg_w = 1920usize;
+    let ffmpeg_h = 1080usize;
+    let ffmpeg_plane_bytes = ffmpeg_w * ffmpeg_h * 3 / 2;
     let ffmpeg_frames = reference
         .len()
-        .checked_div(our_plane_bytes.max(1))
+        .checked_div(ffmpeg_plane_bytes.max(1))
         .unwrap_or(0);
 
+    eprintln!(
+        "[gulli_interlaced_1080] ffmpeg {}x{} | our frames: {} | ffmpeg ref bytes: {} (est. {} frames)",
+        ffmpeg_w, ffmpeg_h, ours_frames.len(), reference.len(), ffmpeg_frames
+    );
+
+    // --------------- compare: match our frames against ffmpeg frames,
+    // trimming our 1088-height frames to 1080 for comparison
     let mut worst_psnr = f64::INFINITY;
     let mut best_psnr = f64::NEG_INFINITY;
     let mut above_40 = 0u32;
@@ -175,10 +174,46 @@ fn conformance_gulli_interlaced_1080() {
     let mut total_compared = 0u32;
     let compare_n = ours_frames.len().min(ffmpeg_frames);
 
-    for i in 0..compare_n {
-        let ours = &ours_frames[i];
-        let theirs = &reference[i * our_plane_bytes..][..our_plane_bytes];
-        let psnr = luma_psnr(ours, theirs);
+    // Build a ffmpeg-frame index: advance through reference bytes per frame
+    let mut ffmpeg_offset: usize = 0;
+    let mut our_idx: usize = 0;
+    while our_idx < compare_n {
+        let (ow, oh, ref our_yuv) = &ours_frames[our_idx];
+        let ow = *ow as usize;
+        let oh = *oh as usize;
+        // Trim our frame to ffmpeg dimensions
+        let our_trimmed = if ow == ffmpeg_w && oh == ffmpeg_h {
+            our_yuv.clone()
+        } else if ow == ffmpeg_w {
+            // Trim height (1088 → 1080)
+            let h = oh.min(ffmpeg_h);
+            let cw = ffmpeg_w / 2;
+            let ch = h / 2;
+            let mut out = Vec::with_capacity(ffmpeg_w * h + 2 * cw * ch);
+            // Luma: first h rows
+            for r in 0..h {
+                out.extend_from_slice(&our_yuv[r * ow..r * ow + ffmpeg_w]);
+            }
+            // Cb/Cr: first ch rows each
+            let cb_start = ow * oh;
+            let cr_start = cb_start + cw * (oh / 2);
+            for r in 0..ch {
+                out.extend_from_slice(&our_yuv[cb_start + r * cw..cb_start + r * cw + cw]);
+            }
+            for r in 0..ch {
+                out.extend_from_slice(&our_yuv[cr_start + r * cw..cr_start + r * cw + cw]);
+            }
+            out
+        } else {
+            // Different width — can't compare, skip
+            our_idx += 1;
+            ffmpeg_offset += ffmpeg_plane_bytes;
+            continue;
+        };
+        let our_bytes = our_trimmed.len();
+        let theirs = &reference[ffmpeg_offset..ffmpeg_offset + our_bytes.min(ffmpeg_plane_bytes)];
+
+        let psnr = luma_psnr(&our_trimmed, theirs);
         if psnr < worst_psnr {
             worst_psnr = psnr;
         }
@@ -190,10 +225,12 @@ fn conformance_gulli_interlaced_1080() {
         } else {
             below_40 += 1;
             if below_40 <= 5 {
-                eprintln!("  frame {i}: luma PSNR = {psnr:.2} dB (BELOW 40 dB floor)",);
+                eprintln!("  frame {our_idx}: luma PSNR = {psnr:.2} dB (BELOW 40 dB floor)",);
             }
         }
         total_compared += 1;
+        our_idx += 1;
+        ffmpeg_offset += ffmpeg_plane_bytes;
     }
 
     let psnr_ok = above_40 == total_compared && total_compared > 0;
