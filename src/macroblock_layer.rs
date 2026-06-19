@@ -2020,7 +2020,7 @@ fn unavail_cbf(current_is_intra: bool, block_type: BlockType) -> bool {
     if current_is_intra {
         mapped <= 2
     } else {
-        mapped >= 3 && mapped <= 5
+        (3..=5).contains(&mapped)
     }
 }
 
@@ -3826,7 +3826,7 @@ fn parse_residual_block_cabac(
     chroma_array_type: u32,
     neighbour_cbf_left: Option<bool>,
     neighbour_cbf_above: Option<bool>,
-    field_pic_flag: bool,
+    _field_pic_flag: bool,
 ) -> McblResult<(Vec<i32>, bool)> {
     let len = (end_idx - start_idx + 1) as usize;
     let mut out = vec![0i32; len];
@@ -3996,7 +3996,7 @@ fn parse_residual_cabac_only(
                     chroma_array_type,
                     ca,
                     cb,
-                field_pic_flag,
+                    field_pic_flag,
                 )?;
                 curr_cbf.cbf_luma_16x16_ac[blk_idx as usize] = coded;
                 out.residual_luma.push(pad_to_16(blk));
@@ -4064,7 +4064,7 @@ fn parse_residual_cabac_only(
                         chroma_array_type,
                         ca,
                         cb,
-                field_pic_flag,
+                        field_pic_flag,
                     )?;
                     curr_cbf.cbf_luma_4x4[blk_idx as usize] = coded;
                     out.residual_luma.push(pad_to_16(blk));
@@ -4168,7 +4168,7 @@ fn parse_residual_cabac_only(
                     chroma_array_type,
                     ca,
                     cb,
-                field_pic_flag,
+                    field_pic_flag,
                 )?;
                 curr_cbf.cbf_cb_ac[blk_idx as usize] = coded;
                 out.residual_chroma_ac_cb.push(pad_to_16(blk));
@@ -4198,7 +4198,7 @@ fn parse_residual_cabac_only(
                     chroma_array_type,
                     ca,
                     cb,
-                field_pic_flag,
+                    field_pic_flag,
                 )?;
                 curr_cbf.cbf_cr_ac[blk_idx as usize] = coded;
                 out.residual_chroma_ac_cr.push(pad_to_16(blk));
@@ -4255,7 +4255,7 @@ fn parse_residual_cabac_only(
                     chroma_array_type,
                     ca,
                     cb,
-                field_pic_flag,
+                    field_pic_flag,
                 )?;
                 if plane_is_cr {
                     curr_cbf.cbf_cr_16x16_dc = coded;
@@ -4294,7 +4294,7 @@ fn parse_residual_cabac_only(
                             chroma_array_type,
                             ca,
                             cb,
-                field_pic_flag,
+                            field_pic_flag,
                         )?;
                         if plane_is_cr {
                             curr_cbf.cbf_cr_16x16_ac[blk_idx as usize] = coded;
@@ -4377,7 +4377,7 @@ fn parse_residual_cabac_only(
                                 chroma_array_type,
                                 ca,
                                 cb,
-                field_pic_flag,
+                                field_pic_flag,
                             )?;
                             if plane_is_cr {
                                 curr_cbf.cbf_cr_luma_4x4[blk_idx as usize] = coded;

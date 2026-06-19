@@ -1034,14 +1034,18 @@ impl H264CodecDecoder {
             }
             return Ok(());
         }
-        if !grid_complete {
-            if std::env::var_os("OXIDEAV_H264_FINALIZE_TRACE").is_some() {
-                let total = in_progress.grid.info.len();
-                let avail = in_progress.grid.info.iter().filter(|m| m.available).count();
-                eprintln!("[FINALIZE] STORING REF (incomplete grid) frame_num={} field_pic={} bottom={} type={:?} avail={}/{}",
-                    in_progress.first_header.frame_num, in_progress.first_header.field_pic_flag,
-                    in_progress.first_header.bottom_field_flag, in_progress.first_header.slice_type, avail, total);
-            }
+        if !grid_complete && std::env::var_os("OXIDEAV_H264_FINALIZE_TRACE").is_some() {
+            let total = in_progress.grid.info.len();
+            let avail = in_progress.grid.info.iter().filter(|m| m.available).count();
+            eprintln!(
+                "[FINALIZE] STORING REF (incomplete grid) frame_num={} field_pic={} bottom={} type={:?} avail={}/{}",
+                in_progress.first_header.frame_num,
+                in_progress.first_header.field_pic_flag,
+                in_progress.first_header.bottom_field_flag,
+                in_progress.first_header.slice_type,
+                avail,
+                total
+            );
         }
         let PictureInProgress {
             mut pic,
@@ -1992,11 +1996,7 @@ fn picture_to_video_frame(pic: &Picture, pts: Option<i64>) -> VideoFrame {
 /// half height) into a full-height progressive frame.  The top field's
 /// rows populate even-numbered output rows starting at y=0; the bottom
 /// field populates odd-numbered rows starting at y=1.
-fn weave_field_pair(
-    top: &VideoFrame,
-    bottom: &VideoFrame,
-    _frame_num: u32,
-) -> VideoFrame {
+fn weave_field_pair(top: &VideoFrame, bottom: &VideoFrame, _frame_num: u32) -> VideoFrame {
     assert_eq!(top.planes.len(), bottom.planes.len());
     let planes: Vec<VideoPlane> = top
         .planes
@@ -2011,10 +2011,8 @@ fn weave_field_pair(
             for row in 0..single_h {
                 let top_row = &t.data[row * stride..(row + 1) * stride];
                 let bot_row = &b.data[row * stride..(row + 1) * stride];
-                data[row * 2 * stride..row * 2 * stride + stride]
-                    .copy_from_slice(top_row);
-                data[(row * 2 + 1) * stride..(row * 2 + 2) * stride]
-                    .copy_from_slice(bot_row);
+                data[row * 2 * stride..row * 2 * stride + stride].copy_from_slice(top_row);
+                data[(row * 2 + 1) * stride..(row * 2 + 2) * stride].copy_from_slice(bot_row);
             }
             VideoPlane { stride, data }
         })

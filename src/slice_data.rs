@@ -504,9 +504,16 @@ pub fn parse_slice_data(
                 let mut next_qp_delta_flag = next_qp_delta_flag;
                 let mb = match mb_result {
                     Ok(m) => {
-                        if curr_mb_addr < 10 && std::env::var_os("OXIDEAV_H264_SLICE_PARSE_TRACE").is_some() {
-                            eprintln!("[SLICE_PARSE] MB {} parsed OK type={:?} range={} offset={}",
-                                curr_mb_addr, m.mb_type, cabac_dec.debug_range(), cabac_dec.debug_offset());
+                        if curr_mb_addr < 10
+                            && std::env::var_os("OXIDEAV_H264_SLICE_PARSE_TRACE").is_some()
+                        {
+                            eprintln!(
+                                "[SLICE_PARSE] MB {} parsed OK type={:?} range={} offset={}",
+                                curr_mb_addr,
+                                m.mb_type,
+                                cabac_dec.debug_range(),
+                                cabac_dec.debug_offset()
+                            );
                         }
                         m
                     }
@@ -691,8 +698,13 @@ pub fn parse_slice_data(
             }
             let end = decode_end_of_slice_flag(&mut cabac_dec)?;
             if std::env::var_os("OXIDEAV_H264_EOS_TRACE").is_some() {
-                eprintln!("[EOS] curr_mb_addr={} end={} range={} offset={}",
-                    curr_mb_addr, end, cabac_dec.debug_range(), cabac_dec.debug_offset());
+                eprintln!(
+                    "[EOS] curr_mb_addr={} end={} range={} offset={}",
+                    curr_mb_addr,
+                    end,
+                    cabac_dec.debug_range(),
+                    cabac_dec.debug_offset()
+                );
             }
             if end {
                 break;
