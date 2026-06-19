@@ -2237,12 +2237,13 @@ pub fn parse_macroblock(
             if trace_mb_range {
                 if let Some((dec, _)) = entropy.cabac.as_ref() {
                     eprintln!(
-                        "[MB {}] {} range={} offset={} bins={}",
+                        "[MB {}] {} range={} offset={} bins={} bypass={}",
                         entropy.current_mb_addr,
                         $label,
                         dec.debug_range(),
                         dec.debug_offset(),
                         dec.bin_count(),
+                        dec.bypass_count,
                     );
                 }
             }
@@ -3910,11 +3911,14 @@ fn parse_residual_block_cabac(
     if trace_block {
         let bins_after = cabac.bin_count();
         eprintln!(
-            "[BLOCK] bt={:?} coded={} consumed={} cumul={} r={} o={}",
-            block_type, coded,
+            "[BLOCK] bt={:?} coded={} consumed={} cumul={} bypass={} r={} o={}",
+            block_type,
+            coded,
             bins_after - bins_before,
             bins_after,
-            cabac.debug_range(), cabac.debug_offset(),
+            cabac.bypass_count,
+            cabac.debug_range(),
+            cabac.debug_offset(),
         );
     }
     Ok((out, true))

@@ -284,6 +284,9 @@ pub struct CabacDecoder<'a> {
     /// Running count of bins decoded (decision + bypass + terminate).
     /// Used only for debug instrumentation, never affects decoding.
     bin_count: u64,
+    /// Running count of bypass bins (DecodeBypass).
+    /// Debug instrumentation for PAFF drift diagnosis.
+    pub bypass_count: u64,
 }
 
 impl<'a> core::fmt::Debug for CabacDecoder<'a> {
@@ -311,6 +314,7 @@ impl<'a> CabacDecoder<'a> {
             cod_i_offset,
             reader,
             bin_count: 0,
+            bypass_count: 0,
         })
     }
 
@@ -436,6 +440,7 @@ impl<'a> CabacDecoder<'a> {
             0
         };
         self.bin_count = self.bin_count.wrapping_add(1);
+        self.bypass_count = self.bypass_count.wrapping_add(1);
         if trace_on {
             eprintln!(
                 "[BIN {:>8}] BP pre_range={:>4} pre_offset={:>4} bin={} post_range={:>4} post_offset={:>4}",
