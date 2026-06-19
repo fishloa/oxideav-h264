@@ -1440,7 +1440,13 @@ impl H264CodecDecoder {
             return Ok(());
         };
         let mut expected = (prev + 1) % max_frame_num;
-        if expected == current_frame_num {
+        let current_mod = current_frame_num % max_frame_num;
+        if expected == current_mod {
+            return Ok(());
+        }
+        // PAFF: top and bottom fields of the same frame share the same
+        // frame_num.  Skip gap-fill when the frame_num hasn't advanced.
+        if current_frame_num == prev {
             return Ok(());
         }
 
