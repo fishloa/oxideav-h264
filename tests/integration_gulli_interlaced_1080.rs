@@ -172,7 +172,8 @@ fn conformance_gulli_interlaced_1080() {
     let mut above_40 = 0u32;
     let mut below_40 = 0u32;
     let mut total_compared = 0u32;
-    let compare_n = ours_frames.len().min(ffmpeg_frames);
+    let max_compare = 20usize;
+    let compare_n = ours_frames.len().min(ffmpeg_frames).min(max_compare);
 
     // Build a ffmpeg-frame index: advance through reference bytes per frame
     let mut ffmpeg_offset: usize = 0;

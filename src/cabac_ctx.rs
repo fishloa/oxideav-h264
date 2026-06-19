@@ -1878,25 +1878,6 @@ impl CabacContexts {
             state_idx: 63,
             val_mps: 0,
         };
-        // PAFF field-specific context ranges (277-336 for sig_coeff_flag
-        // field, 338-399 for last_coeff_flag field) are not yet populated
-        // in the init table.  Re-initialise them neutrally (pStateIdx=63,
-        // valMPS=0 — the non-adapting terminate state) rather than
-        // bootstrapping from frame ranges (which would overwrite contexts
-        // 396-401 that belong to intra_chroma_pred_mode and
-        // transform_size_8x8_flag).
-        for slot in ctx.iter_mut().take(336).skip(277) {
-            *slot = CtxState {
-                state_idx: 63,
-                val_mps: 0,
-            };
-        }
-        for slot in ctx.iter_mut().take(396).skip(338) {
-            *slot = CtxState {
-                state_idx: 63,
-                val_mps: 0,
-            };
-        }
         Ok(Self {
             contexts: ctx,
             slice_kind,
