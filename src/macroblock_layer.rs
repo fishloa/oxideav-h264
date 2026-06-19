@@ -2227,12 +2227,9 @@ pub fn parse_macroblock(
     // ---------------------------------------------------------------
     let dbg_mb_enter = dbg_mb_trace_target();
     let dbg_mb_enter_on = dbg_mb_enter == Some(entropy.current_mb_addr);
-    // OXIDEAV_H264_MBTYPE_TRACE=1 — dump every (mb_addr, mb_type_raw,
-    // bins_consumed, slice_type) tuple for cross-referencing against
-    // an external reference trace when chasing CABAC state divergences.
-    // Emits regardless of OXIDEAV_H264_MB_TRACE so the caller sees all
-    // MBs of every slice in one pass.
-    let dbg_mb_type_all = dbg_mbtype_trace_enabled();
+    let trace_mb_range = std::env::var_os("OXIDEAV_H264_TRACE_MB_RANGE").is_some()
+        && (40..=46).contains(&entropy.current_mb_addr);
+    let dbg_mb_type_all = dbg_mbtype_trace_enabled() || trace_mb_range;
     let mb_type_raw = if let Some((dec, ctxs)) = entropy.cabac.as_mut() {
         let bins_before = dec.bin_count();
         let v = match slice_type {
@@ -2392,7 +2389,7 @@ pub fn parse_macroblock(
             transform_size_8x8_flag,
         )?);
     }
-    if dbg {
+    if dbg || trace_mb_range {
         let (b, bi) = r.position();
         eprintln!(
             "[MB {:>4}]   after mb_pred/sub_mb_pred mb_type={:?} cursor=({},{})",
@@ -2434,7 +2431,7 @@ pub fn parse_macroblock(
         cbp_luma = cbp_total & 0x0F;
         cbp_chroma = (cbp_total >> 4) & 0x03;
     }
-    if dbg {
+    if dbg || trace_mb_range {
         let (b, bi) = r.position();
         eprintln!(
             "[MB {:>4}]   after CBP total={} luma={} chroma={} cursor=({},{})",
@@ -2500,7 +2497,7 @@ pub fn parse_macroblock(
             let bins_before = dec.bin_count();
             let v = decode_mb_qp_delta(dec, ctxs, entropy.prev_mb_qp_delta_nonzero)?;
             let bins_after = dec.bin_count();
-            if dbg {
+            if dbg || trace_mb_range {
                 eprintln!(
                     "[MB {:>4}]   mb_qp_delta decode: prev_nz={} bins_consumed={} value={}",
                     mb_addr_dbg,

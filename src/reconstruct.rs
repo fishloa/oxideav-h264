@@ -578,6 +578,7 @@ pub fn reconstruct_slice_no_deblock<R: RefPicProvider>(
                 mbaff_frame_flag,
                 mb_field_decoding_flag,
                 current_slice_id,
+                slice_header.field_pic_flag,
             )?;
         } else {
             reconstruct_mb_inter(
@@ -748,6 +749,7 @@ fn reconstruct_mb_intra(
     mbaff_frame_flag: bool,
     mb_field_decoding_flag: bool,
     current_slice_id: i32,
+    field_pic_flag: bool,
 ) -> Result<(), ReconstructError> {
     // §6.4.1 — MB sample origin (non-MBAFF eqs. 6-3/6-4 or MBAFF eqs.
     // 6-5..6-10 depending on `mb_field_decoding_flag`).
@@ -814,6 +816,7 @@ fn reconstruct_mb_intra(
                 pic,
                 grid,
                 current_slice_id,
+                field_pic_flag,
             )?;
         }
         MbType::INxN => {
@@ -830,6 +833,7 @@ fn reconstruct_mb_intra(
                 pic,
                 grid,
                 current_slice_id,
+                field_pic_flag,
             )?;
             if chroma_array_type == 3 {
                 // §8.3.4.5 — 4:4:4 I_NxN: Cb/Cr coded like luma, reusing
@@ -899,6 +903,7 @@ fn reconstruct_intra_16x16(
     pic: &mut Picture,
     grid: &MbGrid,
     current_slice_id: i32,
+    field_pic_flag: bool,
 ) -> Result<(), ReconstructError> {
     // -------- §8.3.3 — 16x16 prediction -----------------------------
     let samples = gather_samples_16x16(
@@ -924,9 +929,14 @@ fn reconstruct_intra_16x16(
     let qp_bd_offset_y = qp_bd_offset(sps.bit_depth_luma_minus8);
     let qp_prime_y = qp_y + qp_bd_offset_y;
     let dc_levels = mb.residual_luma_dc.as_ref().copied().unwrap_or([0i32; 16]);
-    // DC coefficients are in zig-zag scan order; inverse-scan to a
-    // 4x4 matrix before the Hadamard.
-    let dc_matrix = crate::transform::inverse_scan_4x4_zigzag(&dc_levels);
+    // DC coefficients are in scan order; inverse-scan to a 4x4 matrix.
+    // §8.5.6 — field pictures use field scan (Table 8-13), frame uses
+    // zigzag (Table 8-14).
+    let dc_matrix = if field_pic_flag {
+        crate::transform::inverse_scan_4x4_field(&dc_levels)
+    } else {
+        crate::transform::inverse_scan_4x4_zigzag(&dc_levels)
+    };
     let dc_y = inverse_hadamard_luma_dc_16x16(&dc_matrix, qp_prime_y, &sl4, bit_depth_y)?;
 
     // -------- §8.5.12 — each of the 16 AC blocks --------------------
@@ -950,7 +960,12 @@ fn reconstruct_intra_16x16(
                 .copied()
                 .unwrap_or([0i32; 16]);
             // AC values at slots 0..=14 are spec scan positions 1..=15.
-            crate::transform::inverse_scan_4x4_zigzag_ac(&ac)
+            // §8.5.6 — field pictures use field scan, frame uses zigzag.
+            if field_pic_flag {
+                crate::transform::inverse_scan_4x4_field_ac(&ac)
+            } else {
+                crate::transform::inverse_scan_4x4_zigzag_ac(&ac)
+            }
         } else {
             [0i32; 16]
         };
@@ -1347,6 +1362,7 @@ fn reconstruct_intra_nxn(
     pic: &mut Picture,
     grid: &mut MbGrid,
     current_slice_id: i32,
+    field_pic_flag: bool,
 ) -> Result<(), ReconstructError> {
     let pred = mb
         .mb_pred
@@ -1547,7 +1563,11 @@ fn reconstruct_intra_nxn(
             } else {
                 [0i32; 16]
             };
-            let coeffs = crate::transform::inverse_scan_4x4_zigzag(&coeffs_scan);
+            let coeffs = if field_pic_flag {
+                crate::transform::inverse_scan_4x4_field(&coeffs_scan)
+            } else {
+                crate::transform::inverse_scan_4x4_zigzag(&coeffs_scan)
+            };
             let residual = inverse_transform_4x4(&coeffs, qp_prime_y, &sl4, bit_depth_y)?;
 
             if debug && (block_idx == 0 || block_idx == 3) {
