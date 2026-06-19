@@ -2228,7 +2228,7 @@ pub fn parse_macroblock(
     let dbg_mb_enter = dbg_mb_trace_target();
     let dbg_mb_enter_on = dbg_mb_enter == Some(entropy.current_mb_addr);
     let trace_mb_range = std::env::var_os("OXIDEAV_H264_TRACE_MB_RANGE").is_some()
-        && (40..=46).contains(&entropy.current_mb_addr);
+        && (0..=2).contains(&entropy.current_mb_addr);
     let dbg_mb_type_all = dbg_mbtype_trace_enabled() || trace_mb_range;
 
     // Helper to dump CABAC state at a trace point
