@@ -2007,17 +2007,8 @@ fn cbf_cond_for(
 /// (unless mb_type(mbAddrN) = I_PCM, which callers filter earlier). Use
 /// `trans_block_unavail_cbf` for the available-but-no-transblock path.
 #[inline]
-fn unavail_cbf(current_is_intra: bool, block_type: BlockType) -> bool {
-    // §9.3.3.1.1.9 Table 9-42: for unavailable neighbours,
-    // intra MB → luma cats (0,1,2) condTerm=1, chroma (3,4) condTerm=0
-    // inter MB → luma cats (0,1,2) condTerm=0, chroma (3,4) condTerm=1
-    let cat = block_type.ctx_block_cat();
-    let is_chroma_cat = cat == 3 || cat == 4;
-    if current_is_intra {
-        !is_chroma_cat
-    } else {
-        is_chroma_cat
-    }
+fn unavail_cbf(current_is_intra: bool, _block_type: BlockType) -> bool {
+    current_is_intra
 }
 
 /// §9.3.3.1.1.9 — "mbAddrN available but transBlockN not available"
