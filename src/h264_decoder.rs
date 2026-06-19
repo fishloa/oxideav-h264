@@ -1011,7 +1011,16 @@ impl H264CodecDecoder {
         // walked ~4 MBs before CABAC-end then handed off to the next
         // slice — total coverage ≪ PicSizeInMbs, leaving most of the
         // luma + chroma planes zero on output.
-        if in_progress.grid.info.iter().any(|m| !m.available) {
+        // Push the partially-decoded picture into the ref store when it
+        // is a reference picture with at least one successful slice, even
+        // if the grid is incomplete (e.g. PAFF field-picture CABAC still
+        // desyncs partway through).  This allows later P/B slices to
+        // resolve references. The incomplete pixel regions will be
+        // zero/neutral — not spec-correct but acceptable while PAFF is
+        // under development.  Do NOT emit a VideoFrame for incomplete pics.
+        let grid_complete = !in_progress.grid.info.iter().any(|m| !m.available);
+        let can_store_ref = in_progress.is_reference && in_progress.any_slice_succeeded;
+        if !grid_complete && !can_store_ref {
             if std::env::var_os("OXIDEAV_H264_FINALIZE_TRACE").is_some() {
                 let total = in_progress.grid.info.len();
                 let avail = in_progress.grid.info.iter().filter(|m| m.available).count();
@@ -1020,6 +1029,15 @@ impl H264CodecDecoder {
                     in_progress.first_header.bottom_field_flag, in_progress.first_header.slice_type, avail, total);
             }
             return Ok(());
+        }
+        if !grid_complete {
+            if std::env::var_os("OXIDEAV_H264_FINALIZE_TRACE").is_some() {
+                let total = in_progress.grid.info.len();
+                let avail = in_progress.grid.info.iter().filter(|m| m.available).count();
+                eprintln!("[FINALIZE] STORING REF (incomplete grid) frame_num={} field_pic={} bottom={} type={:?} avail={}/{}",
+                    in_progress.first_header.frame_num, in_progress.first_header.field_pic_flag,
+                    in_progress.first_header.bottom_field_flag, in_progress.first_header.slice_type, avail, total);
+            }
         }
         let PictureInProgress {
             mut pic,
@@ -1219,14 +1237,19 @@ impl H264CodecDecoder {
             poc.pic_order_cnt
         };
 
-        let entry = OutputEntry {
-            picture: vf,
-            pic_order_cnt: output_poc,
-            frame_num: first_header.frame_num,
-            needed_for_output: true,
-        };
-        if let Some(bumped) = self.output_dpb.push(entry) {
-            self.ready.push_back(bumped.picture);
+        // Incomplete grids are stored as references but NOT emitted as
+        // VideoFrames (the pixel regions beyond the decoded MBs are
+        // zero-initialised and would corrupt PSNR).
+        if grid_complete {
+            let entry = OutputEntry {
+                picture: vf,
+                pic_order_cnt: output_poc,
+                frame_num: first_header.frame_num,
+                needed_for_output: true,
+            };
+            if let Some(bumped) = self.output_dpb.push(entry) {
+                self.ready.push_back(bumped.picture);
+            }
         }
 
         Ok(())
