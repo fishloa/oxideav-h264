@@ -54,13 +54,23 @@ fn decoder_yuv(path: &std::path::Path) -> Vec<(u32, u32, Vec<u8>)> {
     dec.flush().expect("flush");
 
     let mut frames: Vec<(u32, u32, Vec<u8>)> = Vec::new();
+    let mut frame_idx = 0usize;
     loop {
         match dec.receive_frame() {
             Ok(Frame::Video(vf)) => {
                 let w = vf.planes[0].stride as u32;
                 let h = (vf.planes[0].data.len() / vf.planes[0].stride) as u32;
                 let yuv = videoframe_to_yuv420p(&vf);
+                if frame_idx == 0 {
+                    eprintln!(
+                        "  frame0: {}x{} first16: {:?}",
+                        w,
+                        h,
+                        &yuv[..16.min(yuv.len())]
+                    );
+                }
                 frames.push((w, h, yuv));
+                frame_idx += 1;
             }
             Ok(other) => {
                 eprintln!("  unexpected non-video frame: {:?}", other);
