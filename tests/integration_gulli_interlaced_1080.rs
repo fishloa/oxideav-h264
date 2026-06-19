@@ -68,6 +68,7 @@ fn decoder_yuv(path: &std::path::Path) -> Vec<(u32, u32, Vec<u8>)> {
                         h,
                         &yuv[..16.min(yuv.len())]
                     );
+                    let _ = std::fs::write("/tmp/ours.yuv", &yuv);
                 }
                 frames.push((w, h, yuv));
                 frame_idx += 1;

@@ -1296,19 +1296,12 @@ impl H264CodecDecoder {
                     }
                     if matched {
                         if std::env::var_os("OXIDEAV_H264_WEAVE_TRACE").is_some() {
+                            let th = top_vf.planes[0].data.len() / top_vf.planes[0].stride;
                             eprintln!(
-                                "[WEAVE] weaving fn={} h={}→{}",
-                                bid_fnum,
-                                top_vf
-                                    .planes
-                                    .first()
-                                    .map(|p| p.data.len() / p.stride)
-                                    .unwrap_or(0),
-                                2 * top_vf
-                                    .planes
-                                    .first()
-                                    .map(|p| p.data.len() / p.stride)
-                                    .unwrap_or(0)
+                                "[WEAVE] fn={} h={}→{} top0={:?} bot0={:?}",
+                                bid_fnum, th, 2*th,
+                                &top_vf.planes[0].data[..16],
+                                &vf.planes[0].data[..16],
                             );
                         }
                         let woven = weave_field_pair(&top_vf, &vf, first_header.frame_num);
