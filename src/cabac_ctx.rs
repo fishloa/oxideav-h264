@@ -4396,6 +4396,14 @@ mod tests {
         /// §9.3.4.5 Figure 9-12 — EncodeFlush. Terminates the stream so
         /// all outstanding bits are flushed and the decoder's 9-bit
         /// codIOffset read lines up against valid data.
+        fn encode_bypass(&mut self, bin: u8) {
+            // §9.3.4.2: codILow <<= 1; if bin: codILow += codIRange
+            self.cod_i_low <<= 1;
+            if bin != 0 {
+                self.cod_i_low += self.cod_i_range;
+            }
+        }
+
         fn finish(mut self) -> Vec<u8> {
             // codIRange = 2
             self.cod_i_range = 2;
