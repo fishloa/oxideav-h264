@@ -1787,6 +1787,7 @@ fn cbf_cond_for(
     is_left_dir: bool,
     is_cr: bool,
 ) -> bool {
+    let dbg_cbf = std::env::var_os("OXIDEAV_H264_TRACE_CBF").is_some();
     match loc {
         CbfLoc::Internal4x4(xn, yn) => {
             if xn >= 0 && yn >= 0 {
@@ -1817,6 +1818,32 @@ fn cbf_cond_for(
                     (xn, yn + 16)
                 };
                 let bi = blk4x4_idx(wx, wy) as usize;
+                // Trace for field-picture desync diagnosis
+                if dbg_cbf {
+                    eprintln!(
+                        "[CBF] dir={} addr={} xy=({},{}) wrap=({},{}) bi={} avail={} avail8x8={}",
+                        if is_left_dir { "L" } else { "A" },
+                        addr,
+                        xn,
+                        yn,
+                        wx,
+                        wy,
+                        bi,
+                        info.available,
+                        match block_type {
+                            BlockType::Luma4x4
+                            | BlockType::Luma16x16Ac
+                            | BlockType::CbLuma4x4
+                            | BlockType::CrLuma4x4
+                            | BlockType::CbIntra16x16Ac
+                            | BlockType::CrIntra16x16Ac => {
+                                let blk8 = (bi >> 2) as u8;
+                                ((info.coded_block_pattern_luma >> blk8) & 1) != 0
+                            }
+                            _ => false,
+                        },
+                    );
+                }
                 // §9.3.3.1.1.9 — transBlockN availability for Luma4x4 /
                 // Luma16x16Ac / CbLuma4x4 / CrLuma4x4 / CbIntra16x16Ac /
                 // CrIntra16x16Ac cat 1/2/7/8/11/12: the neighbour's 4x4
@@ -1873,7 +1900,18 @@ fn cbf_cond_for(
                     }
                     _ => {}
                 }
-                cbf_luma_for(info, block_type, bi)
+                let val = cbf_luma_for(info, block_type, bi);
+                if dbg_cbf {
+                    eprintln!(
+                        "[CBF] result={} bt={:?} bi={} cbf4x4={} cbf16ac={}",
+                        val,
+                        block_type,
+                        bi,
+                        info.cbf_luma_4x4.get(bi).copied().unwrap_or(false),
+                        info.cbf_luma_16x16_ac.get(bi).copied().unwrap_or(false),
+                    );
+                }
+                val
             }
         }
         CbfLoc::InternalChromaAc(xn, yn, _blk_idx) => {
