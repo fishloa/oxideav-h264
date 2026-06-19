@@ -965,7 +965,13 @@ impl H264CodecDecoder {
             &mut in_progress.pic,
             &mut in_progress.grid,
         )
-        .map_err(|e| Error::invalid(format!("h264 reconstruct: {e}")))?;
+        .map_err(|e| {
+            eprintln!(
+                "DBG: reconstruct failed slice_type={:?} frame_num={}: {}",
+                header.slice_type, header.frame_num, e
+            );
+            Error::invalid(format!("h264 reconstruct: {e}"))
+        })?;
 
         // §7.4.4 — copy this slice's per-MB mb_field_decoding_flag
         // values into the picture-wide array so `finalize_in_progress_picture`
@@ -1013,9 +1019,10 @@ impl H264CodecDecoder {
         // fail "CABAC read past end of bitstream").
         if !in_progress.any_slice_succeeded {
             if std::env::var_os("OXIDEAV_H264_FINALIZE_TRACE").is_some() {
-                eprintln!("[FINALIZE] DROPPED (no slice succeeded) frame_num={} field_pic={} bottom={} type={:?}",
+                eprintln!("[FINALIZE] DROPPED (no slice succeeded) frame_num={} field_pic={} bottom={} type={:?} is_ref={}",
                     in_progress.first_header.frame_num, in_progress.first_header.field_pic_flag,
-                    in_progress.first_header.bottom_field_flag, in_progress.first_header.slice_type);
+                    in_progress.first_header.bottom_field_flag, in_progress.first_header.slice_type,
+                    in_progress.is_reference);
             }
             return Ok(());
         }
