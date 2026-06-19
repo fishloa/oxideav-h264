@@ -729,13 +729,17 @@ pub fn parse_slice_data(
             // end_of_slice_flag to never fire, terminate at
             // PicSizeInMbs to avoid a runaway hang.
             if curr_mb_addr >= pic_size_in_mbs {
-                break;
+                // CABAC desynchronized — end_of_slice_flag never fired.
+                // Return an error so the caller skips reconstruction
+                // (garbage MBs with random MVs would take ~20s per
+                // slice to motion-compensate against the gray fallback).
+                return Err(SliceDataError::MbAddrOverflow(pic_size_in_mbs));
             }
             // Secondary cap: if the CABAC engine has consumed an
             // unreasonable number of bins (> 200 per MB × pic_size),
             // the stream is desynchronized — terminate early.
             if cabac_dec.bin_count() > (pic_size_in_mbs as u64) * 200 {
-                break;
+                return Err(SliceDataError::MbAddrOverflow(pic_size_in_mbs));
             }
         }
     } else {
