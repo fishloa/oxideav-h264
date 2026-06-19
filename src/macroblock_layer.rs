@@ -2725,9 +2725,13 @@ fn parse_mb_pred(
         // (`mbaff_frame_flag == false`), so the "mb_field !=
         // field_pic" condition simplifies away.
         let num_parts = mb_type.num_mb_part() as usize;
-        let mbaff_override = entropy.mbaff_frame_flag && entropy.mb_field_decoding_flag;
-        let ref_l0_present = entropy.num_ref_idx_l0_active_minus1 > 0 || mbaff_override;
-        let ref_l1_present = entropy.num_ref_idx_l1_active_minus1 > 0 || mbaff_override;
+        // §7.3.5.1/.2 — ref_idx is present when
+        //   num_ref_idx_lX_active_minus1 > 0 || mb_field_decoding_flag != field_pic_flag
+        // For field pictures (field_pic_flag=1, mb_field_decoding_flag=0),
+        // the second condition is always true, so ref_idx is ALWAYS present.
+        let field_diff = entropy.mb_field_decoding_flag != entropy.field_pic_flag;
+        let ref_l0_present = entropy.num_ref_idx_l0_active_minus1 > 0 || field_diff;
+        let ref_l1_present = entropy.num_ref_idx_l1_active_minus1 > 0 || field_diff;
         let x_l0 = entropy.num_ref_idx_l0_active_minus1;
         let x_l1 = entropy.num_ref_idx_l1_active_minus1;
 
