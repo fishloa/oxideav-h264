@@ -287,6 +287,18 @@ pub struct CabacDecoder<'a> {
     /// Running count of bypass bins (DecodeBypass).
     /// Debug instrumentation for PAFF drift diagnosis.
     pub bypass_count: u64,
+    /// Bitmask of context indices accessed (one bit per ctxIdx 0..511).
+    /// Debug instrumentation for PAFF ctxIdx tracking.
+    pub ctx_mask: [u64; 8],
+}
+
+impl CabacDecoder<'_> {
+    /// Record that ctxIdx `idx` was accessed.
+    pub fn record_ctx(&mut self, idx: usize) {
+        if idx < 512 {
+            self.ctx_mask[idx / 64] |= 1u64 << (idx as u64 % 64);
+        }
+    }
 }
 
 impl<'a> core::fmt::Debug for CabacDecoder<'a> {
@@ -315,6 +327,7 @@ impl<'a> CabacDecoder<'a> {
             reader,
             bin_count: 0,
             bypass_count: 0,
+            ctx_mask: [0u64; 8],
         })
     }
 
