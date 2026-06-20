@@ -223,6 +223,91 @@ fn inverse_scan_8x8_zigzag(levels: &[i32; 64]) -> [i32; 64] {
     out
 }
 
+/// §8.5.7 / Table 8-14 — inverse 8x8 **field** scan, used for transform
+/// coefficient levels in field macroblocks (PAFF field pictures /
+/// MBAFF field MBs). `FIELD_SCAN_8X8[idx] = (i, j)` maps scan-order
+/// position `idx` to row-major matrix entry `c[i][j]`. Reproduced
+/// verbatim from Table 8-14 (field-scan row) of ITU-T H.264 (08/2024),
+/// PDF p. 184.
+const FIELD_SCAN_8X8: [(usize, usize); 64] = [
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (0, 1),
+    (1, 1),
+    (3, 0),
+    (4, 0),
+    (2, 1),
+    (0, 2),
+    (3, 1),
+    (5, 0),
+    (6, 0),
+    (7, 0),
+    (4, 1),
+    (1, 2),
+    (0, 3),
+    (2, 2),
+    (5, 1),
+    (6, 1),
+    (7, 1),
+    (3, 2),
+    (1, 3),
+    (0, 4),
+    (2, 3),
+    (4, 2),
+    (5, 2),
+    (6, 2),
+    (7, 2),
+    (3, 3),
+    (1, 4),
+    (0, 5),
+    (2, 4),
+    (4, 3),
+    (5, 3),
+    (6, 3),
+    (7, 3),
+    (3, 4),
+    (1, 5),
+    (0, 6),
+    (2, 5),
+    (4, 4),
+    (5, 4),
+    (6, 4),
+    (7, 4),
+    (3, 5),
+    (1, 6),
+    (2, 6),
+    (4, 5),
+    (5, 5),
+    (6, 5),
+    (7, 5),
+    (3, 6),
+    (0, 7),
+    (1, 7),
+    (4, 6),
+    (5, 6),
+    (6, 6),
+    (7, 6),
+    (2, 7),
+    (3, 7),
+    (4, 7),
+    (5, 7),
+    (6, 7),
+    (7, 7),
+];
+
+/// §8.5.7 — invert the 8x8 field scan (field-macroblock case of
+/// Table 8-14). Input is the 64-entry scan-order coefficient list;
+/// output is the row-major 8x8 matrix ready for
+/// [`inverse_transform_8x8`].
+fn inverse_scan_8x8_field(levels: &[i32; 64]) -> [i32; 64] {
+    let mut out = [0i32; 64];
+    for (k, &(i, j)) in FIELD_SCAN_8X8.iter().enumerate() {
+        out[i * 8 + j] = levels[k];
+    }
+    out
+}
+
 // -------------------------------------------------------------------------
 // §6.4.1 — per-MB sample-origin derivation (frame + MBAFF pictures)
 // -------------------------------------------------------------------------
@@ -1465,10 +1550,16 @@ fn reconstruct_intra_nxn(
                             }
                         }
                     }
-                    // §8.5.7 / Table 8-14 — invert the 8x8 zig-zag
-                    // scan. `inverse_transform_8x8` consumes a row-
-                    // major 8x8 matrix (c_ij at index i*8+j).
-                    inverse_scan_8x8_zigzag(&scan)
+                    // §8.5.7 / Table 8-14 — invert the 8x8 scan.
+                    // Field macroblocks (PAFF / MBAFF field) use the
+                    // 8x8 field scan; frame MBs use the zig-zag scan.
+                    // `inverse_transform_8x8` consumes a row-major 8x8
+                    // matrix (c_ij at index i*8+j).
+                    if field_pic_flag {
+                        inverse_scan_8x8_field(&scan)
+                    } else {
+                        inverse_scan_8x8_zigzag(&scan)
+                    }
                 } else {
                     [0i32; 64]
                 }
@@ -3031,7 +3122,13 @@ fn reconstruct_mb_inter<R: RefPicProvider>(
                         }
                     }
                 }
-                inverse_scan_8x8_zigzag(&scan)
+                // §8.5.7 / Table 8-14 — field MBs use the 8x8 field
+                // scan; frame MBs use the zig-zag scan.
+                if slice_header.field_pic_flag {
+                    inverse_scan_8x8_field(&scan)
+                } else {
+                    inverse_scan_8x8_zigzag(&scan)
+                }
             } else {
                 [0i32; 64]
             };
@@ -8571,6 +8668,41 @@ mod tests {
         assert_eq!(m[8], 13, "idx 2 → c10");
         assert_eq!(m[8 + 2], 17, "idx 7 → c12");
         assert_eq!(m[7 * 8 + 7], 77, "idx 63 → c77");
+    }
+
+    #[test]
+    fn inverse_scan_8x8_field_matches_table_8_14() {
+        // Table 8-14 field-scan row (ITU-T H.264 08/2024, PDF p.184):
+        //   idx 0  → c00 (0,0)
+        //   idx 1  → c10 (1,0)
+        //   idx 2  → c20 (2,0)
+        //   idx 3  → c01 (0,1)
+        //   idx 12 → c70 (7,0)
+        //   idx 52 → c07 (0,7)
+        //   idx 63 → c77 (7,7)
+        let mut scan = [0i32; 64];
+        scan[0] = 1;
+        scan[1] = 2;
+        scan[2] = 3;
+        scan[3] = 4;
+        scan[12] = 70;
+        scan[52] = 7;
+        scan[63] = 99;
+        let m = inverse_scan_8x8_field(&scan);
+        assert_eq!(m[0], 1, "idx 0 → c00");
+        assert_eq!(m[8], 2, "idx 1 → c10");
+        assert_eq!(m[2 * 8], 3, "idx 2 → c20");
+        assert_eq!(m[1], 4, "idx 3 → c01");
+        assert_eq!(m[7 * 8], 70, "idx 12 → c70");
+        assert_eq!(m[7], 7, "idx 52 → c07");
+        assert_eq!(m[7 * 8 + 7], 99, "idx 63 → c77");
+        // Field scan must be a permutation: all 64 positions distinct.
+        let mut seen = [false; 64];
+        for &(i, j) in FIELD_SCAN_8X8.iter() {
+            assert!(!seen[i * 8 + j], "duplicate (i,j) in field scan");
+            seen[i * 8 + j] = true;
+        }
+        assert!(seen.iter().all(|&b| b), "field scan must cover all 64");
     }
 
     #[test]
