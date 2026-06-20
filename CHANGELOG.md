@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/OxideAV/oxideav-h264/compare/v0.1.6...v0.2.0) - 2026-06-20
+
+### Other
+
+- round 349 — gate the verifiable 10-bit right MB column as a QP_Y regression guard
+- round 349 — fix §8.5.8 eq. 8-309 QP_Y derivation for >8-bit luma (10-bit High10 dequant collapse)
+- round 349 — High10 (10-bit) decode-path milestone guard + root-cause the ungateable fixture
+- neutralise black-box-validator naming in §8.3.4.5 4:4:4 test doc (r346 Hat-2)
+- round 346 — enforce High 4:4:4 I_4x4 bit-exact gate + root-cause ReportOnly corpus divergences to defective fixtures
+- neutralise black-box-validator naming in fixture comment
+- round 343 — pin 10 staged fixtures to enforced BitExact tier
+- round 339 — README + CHANGELOG MBAFF decode milestone
+- round 339 — MBAFF coded_block_flag external-MB neighbours via Table 6-4; mbaff-interlaced now decodes end-to-end
+- round 339 — wire §6.4.11.1 MBAFF MB-level neighbours + correct §7.3.5.1 ref_idx override
+- round 339 — §6.4.12.2 Table 6-4 exact MBAFF neighbour-location derivation
+- round 334 — §G.13.1.7 view_dependency_change (SEI payload type 42)
+- round 330 — §H.7.3.2.1.4 seq_parameter_set_mvcd_extension (MVCD profiles 138/135)
+- round 325 — §7.3.2.1.2 seq_parameter_set_extension_rbsp (NAL 13)
+- round 321 — §F.7.3.2.1.4 SVC SPS extension + §F.14.1 SVC VUI
+- round 318 — Annex H §H.13.2.6 alternative_depth_info (SEI payload type 181)
+- round 314 — §8.4.2.2 4:4:4 (ChromaArrayType==3) inter chroma MC + residual
+- refresh to current status, drop per-round changelog cruft
+
 ### Fixed
 
 - round 349 — **§8.5.8 eq. 8-309 QP_Y derivation for >8-bit luma.** The
