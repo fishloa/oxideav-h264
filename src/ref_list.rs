@@ -17,11 +17,12 @@
 //!    marking (MMCO 1..=6).
 //!
 //! Field-specific initialisation (§8.2.4.2.2 / §8.2.4.2.4 / §8.2.4.2.5)
-//! is partially supported: the API takes a `PicStructure` and `current_bottom`
-//! so that `PicNum` derivations for fields are correct, but list
-//! interleaving by parity is not yet modelled — fields are treated as
-//! single-parity reference frames. This keeps the state machine correct
-//! for frame-only coded streams, which is the common case.
+//! is modelled: for field pictures the reference frames are ordered
+//! first (by FrameNumWrap for P, by frame PicOrderCnt for B) and then
+//! parity-interleaved into the field list (same parity as the current
+//! field first, then opposite), matching the JM reference decoder's
+//! `gen_pic_list_from_frame_list`. Complementary fields are paired into
+//! frames by `frame_num` (short-term) / `LongTermFrameIdx` (long-term).
 
 #![allow(dead_code)]
 // Spec-driven §8.2.4 / §8.2.5 ops legitimately take many parameters
@@ -204,6 +205,216 @@ pub enum MmcoOp {
 }
 
 // ---------------------------------------------------------------------
+// §8.2.4.2.5 — Field reference picture list construction.
+//
+// For field pictures the reference list is NOT a direct sort of the
+// field DPB entries. The spec (and the JM reference decoder's
+// `gen_pic_list_from_frame_list`) first orders the reference *frames*
+// (each holding a top + bottom field), then walks that ordered frame
+// list alternating parity — same parity as the current field first,
+// then opposite — to produce the interleaved field list. Our DPB stores
+// each field as its own `DpbEntry` (sharing `frame_num`), so we pair
+// complementary fields into frames first.
+// ---------------------------------------------------------------------
+
+/// A reference frame regrouped from one or both of its field DPB
+/// entries. `*_key` is `Some(dpb_key)` only when that field exists in
+/// the DPB with the marking we are building the list for.
+struct RefFrame {
+    top_key: Option<u32>,
+    bottom_key: Option<u32>,
+    /// `PicOrderCnt` of the frame = min of the present fields' POCs
+    /// (§8.2.4.2.4 / eq. 8-1). Used for B-slice ordering.
+    frame_poc: i32,
+    /// `FrameNumWrap` (§8.2.4.1 eq. 8-27). Used for P-slice ordering.
+    frame_num_wrap: i32,
+    /// `LongTermFrameIdx` (long-term frames only).
+    long_term_frame_idx: u32,
+}
+
+/// Group the DPB's field entries of the requested marking into frames,
+/// pairing complementary fields by `frame_num`.
+fn group_field_frames(
+    dpb: &[DpbEntry],
+    want_long_term: bool,
+    current_frame_num: u32,
+    max_frame_num: u32,
+) -> Vec<RefFrame> {
+    let mut frames: Vec<(u32, RefFrame)> = Vec::new();
+    for e in dpb.iter() {
+        let is_wanted = if want_long_term {
+            e.is_long_term()
+        } else {
+            e.is_short_term()
+        };
+        if !is_wanted {
+            continue;
+        }
+        let fnw = if e.frame_num > current_frame_num {
+            e.frame_num as i64 - max_frame_num as i64
+        } else {
+            e.frame_num as i64
+        } as i32;
+        // Group key: short-term pairs share frame_num; long-term pairs
+        // share LongTermFrameIdx.
+        let key = if want_long_term {
+            e.long_term_frame_idx
+        } else {
+            e.frame_num
+        };
+        let slot = frames.iter_mut().find(|(k, _)| *k == key);
+        let rf = match slot {
+            Some((_, rf)) => rf,
+            None => {
+                frames.push((
+                    key,
+                    RefFrame {
+                        top_key: None,
+                        bottom_key: None,
+                        frame_poc: i32::MAX,
+                        frame_num_wrap: fnw,
+                        long_term_frame_idx: e.long_term_frame_idx,
+                    },
+                ));
+                &mut frames.last_mut().unwrap().1
+            }
+        };
+        match e.structure {
+            PicStructure::BottomField => rf.bottom_key = Some(e.dpb_key),
+            // Top / Frame / FieldPair all carry a usable top field.
+            _ => rf.top_key = Some(e.dpb_key),
+        }
+        rf.frame_poc = rf.frame_poc.min(e.pic_order_cnt);
+    }
+    frames.into_iter().map(|(_, rf)| rf).collect()
+}
+
+/// §8.2.4.2.5 / JM `gen_pic_list_from_frame_list` — walk an ordered
+/// frame list alternating parity (same parity as the current field
+/// first, then opposite) to produce the interleaved field `dpb_key`
+/// list. `same`/`opposite` each advance an independent cursor to the
+/// next frame that actually carries a field of that parity.
+fn interleave_fields(frames: &[RefFrame], current_bottom: bool) -> Vec<u32> {
+    let same = |f: &RefFrame| {
+        if current_bottom {
+            f.bottom_key
+        } else {
+            f.top_key
+        }
+    };
+    let opp = |f: &RefFrame| {
+        if current_bottom {
+            f.top_key
+        } else {
+            f.bottom_key
+        }
+    };
+    let mut out = Vec::new();
+    let mut same_idx = 0usize;
+    let mut opp_idx = 0usize;
+    loop {
+        let before = out.len();
+        while same_idx < frames.len() {
+            let k = same(&frames[same_idx]);
+            same_idx += 1;
+            if let Some(k) = k {
+                out.push(k);
+                break;
+            }
+        }
+        while opp_idx < frames.len() {
+            let k = opp(&frames[opp_idx]);
+            opp_idx += 1;
+            if let Some(k) = k {
+                out.push(k);
+                break;
+            }
+        }
+        if out.len() == before {
+            break;
+        }
+    }
+    out
+}
+
+/// §8.2.4.2.5 P/SP field reference list (RefPicList0).
+fn init_ref_pic_list_p_field(
+    dpb: &[DpbEntry],
+    current_frame_num: u32,
+    max_frame_num: u32,
+    current_bottom: bool,
+) -> Vec<u32> {
+    // Short-term frames ordered by FrameNumWrap descending, then
+    // parity-interleaved.
+    let mut short = group_field_frames(dpb, false, current_frame_num, max_frame_num);
+    short.sort_by_key(|f| std::cmp::Reverse(f.frame_num_wrap));
+    let mut out = interleave_fields(&short, current_bottom);
+    // Long-term frames ordered by LongTermFrameIdx ascending.
+    let mut long = group_field_frames(dpb, true, current_frame_num, max_frame_num);
+    long.sort_by_key(|f| f.long_term_frame_idx);
+    out.extend(interleave_fields(&long, current_bottom));
+    out
+}
+
+/// §8.2.4.2.5 B field reference lists (RefPicList0, RefPicList1).
+fn init_ref_pic_lists_b_field(
+    dpb: &[DpbEntry],
+    current_poc: i32,
+    current_frame_num: u32,
+    max_frame_num: u32,
+    current_bottom: bool,
+) -> (Vec<u32>, Vec<u32>) {
+    let short = group_field_frames(dpb, false, current_frame_num, max_frame_num);
+    // Ordered frame list for list0: (poc <= cur, desc) then (poc > cur, asc).
+    let mut le: Vec<&RefFrame> = short
+        .iter()
+        .filter(|f| f.frame_poc <= current_poc)
+        .collect();
+    let mut gt: Vec<&RefFrame> = short.iter().filter(|f| f.frame_poc > current_poc).collect();
+    le.sort_by_key(|f| std::cmp::Reverse(f.frame_poc));
+    gt.sort_by_key(|f| f.frame_poc);
+    let frames0: Vec<RefFrame> = le
+        .iter()
+        .chain(gt.iter())
+        .map(|f| RefFrame {
+            top_key: f.top_key,
+            bottom_key: f.bottom_key,
+            frame_poc: f.frame_poc,
+            frame_num_wrap: f.frame_num_wrap,
+            long_term_frame_idx: f.long_term_frame_idx,
+        })
+        .collect();
+    // list1 frame order = the two halves of list0 swapped.
+    let frames1: Vec<RefFrame> = gt
+        .iter()
+        .chain(le.iter())
+        .map(|f| RefFrame {
+            top_key: f.top_key,
+            bottom_key: f.bottom_key,
+            frame_poc: f.frame_poc,
+            frame_num_wrap: f.frame_num_wrap,
+            long_term_frame_idx: f.long_term_frame_idx,
+        })
+        .collect();
+
+    let mut list0 = interleave_fields(&frames0, current_bottom);
+    let mut list1 = interleave_fields(&frames1, current_bottom);
+
+    // Long-term frames (ascending LongTermFrameIdx), appended to both.
+    let mut long = group_field_frames(dpb, true, current_frame_num, max_frame_num);
+    long.sort_by_key(|f| f.long_term_frame_idx);
+    let long_fields = interleave_fields(&long, current_bottom);
+    list0.extend(long_fields.iter().copied());
+    list1.extend(long_fields.iter().copied());
+
+    // §8.2.4.2.3 final rule — identical lists with >1 entry → swap [0],[1].
+    if list1.len() > 1 && list1 == list0 {
+        list1.swap(0, 1);
+    }
+    (list0, list1)
+}
+
+// ---------------------------------------------------------------------
 // §8.2.4.2 — Initialisation of reference picture lists.
 // ---------------------------------------------------------------------
 
@@ -226,6 +437,12 @@ pub fn init_ref_pic_list_p(
     current_bottom: bool,
 ) -> Vec<u32> {
     let current_is_field = current_structure.is_field();
+
+    // §8.2.4.2.5 — field pictures use the frame-list + parity-interleave
+    // construction, not a direct PicNum sort of field entries.
+    if current_is_field {
+        return init_ref_pic_list_p_field(dpb, current_frame_num, max_frame_num, current_bottom);
+    }
 
     // 1. Short-term, descending PicNum.
     let mut short: Vec<(i32, u32)> = dpb
@@ -290,6 +507,14 @@ pub fn init_ref_pic_lists_b(
     current_bottom: bool,
 ) -> (Vec<u32>, Vec<u32>) {
     let current_is_field = current_structure.is_field();
+
+    // §8.2.4.2.5 — field pictures use the frame-list + parity-interleave
+    // construction. frame_num/max_frame_num are only needed for the P
+    // (FrameNumWrap) ordering; B orders frames by POC, so pass
+    // placeholders (the grouping key is the entries' real frame_num).
+    if current_is_field {
+        return init_ref_pic_lists_b_field(dpb, current_poc, 0, u32::MAX, current_bottom);
+    }
 
     // Partition short-term refs by POC vs current.
     let mut st_less: Vec<(i32, u32)> = Vec::new();
