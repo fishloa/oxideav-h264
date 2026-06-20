@@ -1283,6 +1283,14 @@ impl H264CodecDecoder {
             poc.pic_order_cnt
         };
 
+        // Incomplete grid: the picture was stored as a reference above
+        // (so later slices can resolve it) but must NOT be output — most
+        // of its planes are zero/neutral. common H.264 decoders reject
+        // such an access unit. Regression-guarded by fuzz crash-b20f4127.
+        if !grid_complete {
+            return Ok(());
+        }
+
         // §C.4 open-GOP leading-picture suppression. The first decoded
         // picture at stream start (or the IDR after a reset) is the
         // random-access point; its POC is the output floor. Pictures with
