@@ -11,3 +11,7 @@ Cargo.lock
 /fuzz/corpus
 /fuzz/artifacts
 /fuzz/coverage
+trace_dec.txt
+dataDec.txt
+log.dec
+test_dec.yuv

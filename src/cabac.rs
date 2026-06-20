@@ -290,6 +290,8 @@ pub struct CabacDecoder<'a> {
     /// Bitmask of context indices accessed (one bit per ctxIdx 0..511).
     /// Debug instrumentation for PAFF ctxIdx tracking.
     pub ctx_mask: [u64; 8],
+    /// Last context index accessed (for debug tracing).
+    pub debug_last_ctx_idx: usize,
 }
 
 impl CabacDecoder<'_> {
@@ -298,6 +300,7 @@ impl CabacDecoder<'_> {
         if idx < 512 {
             self.ctx_mask[idx / 64] |= 1u64 << (idx as u64 % 64);
         }
+        self.debug_last_ctx_idx = idx;
     }
 }
 
@@ -328,6 +331,7 @@ impl<'a> CabacDecoder<'a> {
             bin_count: 0,
             bypass_count: 0,
             ctx_mask: [0u64; 8],
+            debug_last_ctx_idx: 0,
         })
     }
 
@@ -421,8 +425,9 @@ impl<'a> CabacDecoder<'a> {
         self.bin_count = self.bin_count.wrapping_add(1);
         if trace_on {
             eprintln!(
-                "[BIN {:>8}] DD pre_state={:>2} pre_mps={} pre_range={:>4} pre_offset={:>4} bin={} post_state={:>2} post_mps={} post_range={:>4} post_offset={:>4}",
+                "[BIN {:>8}] DD ctx={} pre_state={:>2} pre_mps={} pre_range={:>4} pre_offset={:>4} bin={} post_state={:>2} post_mps={} post_range={:>4} post_offset={:>4}",
                 self.bin_count,
+                self.debug_last_ctx_idx,
                 pre_state, pre_mps, pre_range, pre_offset,
                 bin_val,
                 ctx.state_idx, ctx.val_mps, self.cod_i_range, self.cod_i_offset,
