@@ -2774,13 +2774,17 @@ fn parse_mb_pred(
         // (`mbaff_frame_flag == false`), so the "mb_field !=
         // field_pic" condition simplifies away.
         let num_parts = mb_type.num_mb_part() as usize;
-        // §7.3.5.1/.2 — ref_idx is present when
-        //   num_ref_idx_lX_active_minus1 > 0 || mb_field_decoding_flag != field_pic_flag
-        // For field pictures (field_pic_flag=1, mb_field_decoding_flag=0),
-        // the second condition is always true, so ref_idx is ALWAYS present.
-        let field_diff = entropy.mb_field_decoding_flag != entropy.field_pic_flag;
-        let ref_l0_present = entropy.num_ref_idx_l0_active_minus1 > 0 || field_diff;
-        let ref_l1_present = entropy.num_ref_idx_l1_active_minus1 > 0 || field_diff;
+        // §7.3.5.1/.2 + JM reference (prepareListforRefIdx): ref_idx is
+        // only decoded when num_ref_idx_active > 1. The spec formula
+        // `num_ref_idx_lX_active_minus1 > 0 || mb_field_decoding_flag !=
+        // field_pic_flag` is the theoretical condition, but the JM
+        // reference decoder gates the entire ref_idx decode on
+        // `num_ref_idx_active > 1` (prepareListforRefIdx line 150),
+        // ignoring the field_diff branch when there's only 1 reference.
+        // For PAFF field pictures with a single reference, this means
+        // ref_idx is NOT decoded (defaulting to 0), matching JM.
+        let ref_l0_present = entropy.num_ref_idx_l0_active_minus1 > 0;
+        let ref_l1_present = entropy.num_ref_idx_l1_active_minus1 > 0;
         let x_l0 = entropy.num_ref_idx_l0_active_minus1;
         let x_l1 = entropy.num_ref_idx_l1_active_minus1;
 
