@@ -733,12 +733,19 @@ pub fn parse_slice_data(
             if curr_mb_addr >= pic_size_in_mbs * 8 {
                 return Err(SliceDataError::MbAddrOverflow(pic_size_in_mbs));
             }
-            // Secondary cap: if the CABAC engine has consumed an
-            // unreasonable number of bins relative to the picture,
-            // the stream is desynchronized — terminate early.
-            // Use pic_size * 800 to avoid false triggers on small
-            // pictures (e.g. 2-MB test fixtures with ~500 bins/MB).
-            if cabac_dec.bin_count() > (pic_size_in_mbs as u64) * 800 {
+            // Secondary cap: a backstop against a desynced stream that
+            // never fires end_of_slice_flag. The `curr_mb_addr` cap above
+            // is the primary guard (each MB decode is itself finite); this
+            // bin cap only needs to be loose enough never to false-trigger
+            // on a legitimately dense macroblock. A single 16x16 MB with a
+            // maximal CABAC residual (256 luma + chroma coefficients, each
+            // with significance/last/UEGk-abs-level/sign bins) can reach
+            // several thousand bins; trellis-quantised intra frames run
+            // ~1100 bins/MB. Use 64K bins/MB — far above any conformant
+            // macroblock, still bounded for runaway detection. (Was 800,
+            // which false-triggered on dense small intra frames — the
+            // trellis_quant_intra self-roundtrip tests.)
+            if cabac_dec.bin_count() > (pic_size_in_mbs as u64) * 65536 {
                 return Err(SliceDataError::MbAddrOverflow(pic_size_in_mbs));
             }
         }
