@@ -951,6 +951,7 @@ fn reconstruct_mb_intra(
                     pic,
                     grid,
                     current_slice_id,
+                    field_pic_flag,
                 )?;
             }
         }
@@ -1083,6 +1084,7 @@ fn reconstruct_intra_16x16(
         pic,
         grid,
         current_slice_id,
+        field_pic_flag,
     )?;
 
     Ok(())
@@ -1734,6 +1736,7 @@ fn reconstruct_chroma_intra(
     pic: &mut Picture,
     grid: &MbGrid,
     current_slice_id: i32,
+    field_pic_flag: bool,
 ) -> Result<(), ReconstructError> {
     // Monochrome: no chroma work to do.
     if chroma_array_type == 0 {
@@ -1891,7 +1894,12 @@ fn reconstruct_chroma_intra(
                 [0i32; 16]
             };
             // Chroma AC: parser slots 0..=14 are spec scan positions 1..=15.
-            let mut coeffs = crate::transform::inverse_scan_4x4_zigzag_ac(&ac_scan);
+            // §8.5.7 — field MBs use the 4x4 field AC scan.
+            let mut coeffs = if field_pic_flag {
+                crate::transform::inverse_scan_4x4_field_ac(&ac_scan)
+            } else {
+                crate::transform::inverse_scan_4x4_zigzag_ac(&ac_scan)
+            };
             coeffs[0] = dc_c;
             let residual = inverse_transform_4x4_dc_preserved(&coeffs, qp_c, sl4, bit_depth_c)?;
 
@@ -3205,6 +3213,7 @@ fn reconstruct_mb_inter<R: RefPicProvider>(
             &pred_cb,
             &pred_cr,
             pic,
+            slice_header.field_pic_flag,
         )?;
     } else if chroma_array_type == 3 {
         // §8.5.5 — 4:4:4 chroma "coded like luma": the residual is gated
@@ -5771,6 +5780,7 @@ fn reconstruct_inter_chroma_residual(
     pred_cb: &[i32],
     pred_cr: &[i32],
     pic: &mut Picture,
+    field_pic_flag: bool,
 ) -> Result<(), ReconstructError> {
     let (mbw_c, _mbh_c) = chroma_mb_dims(chroma_array_type);
     // §6.4.1 — MBAFF-aware chroma origin from writer.
@@ -5843,7 +5853,12 @@ fn reconstruct_inter_chroma_residual(
                 [0i32; 16]
             };
             // Chroma AC: parser slots 0..=14 are spec scan positions 1..=15.
-            let mut coeffs = crate::transform::inverse_scan_4x4_zigzag_ac(&ac_scan);
+            // §8.5.7 — field MBs use the 4x4 field AC scan.
+            let mut coeffs = if field_pic_flag {
+                crate::transform::inverse_scan_4x4_field_ac(&ac_scan)
+            } else {
+                crate::transform::inverse_scan_4x4_zigzag_ac(&ac_scan)
+            };
             coeffs[0] = dc_c;
             let residual = inverse_transform_4x4_dc_preserved(&coeffs, qp_c, sl4, bit_depth_c)?;
             let (bx, by) = chroma_block_xy(chroma_array_type, blk);
