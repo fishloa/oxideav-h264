@@ -185,6 +185,14 @@ pub struct H264CodecDecoder {
     /// §8.7.2 — buffered top field waiting for its complementary
     /// bottom field for PAFF weaving. `(frame_num, top_vf, output_poc)`.
     pending_top_field: Option<(u32, VideoFrame, i32)>,
+    /// §C.4 open-GOP leading-picture suppression. Set to the
+    /// `PicOrderCnt` of the first decoded picture (the random-access
+    /// point) at stream start / after an IDR. Pictures whose output POC
+    /// is *less* than this — leading pictures that follow the IRAP in
+    /// decode order but precede it in output order — cannot be correctly
+    /// reconstructed from a clean random-access start and are dropped
+    /// from output (matching ffmpeg), though still kept as references.
+    output_poc_floor: Option<i32>,
     /// Long-lived decoded picture store. Holds reconstructed Pictures
     /// by DPB slot key. The per-slice ref_pic_list_0 / _1 arrays are
     /// repopulated for every slice via `set_list_0` / `set_list_1`.
@@ -260,6 +268,7 @@ impl H264CodecDecoder {
             pending_pts: None,
             pending_time_base: TimeBase::new(1, 1),
             pending_top_field: None,
+            output_poc_floor: None,
             ref_store: RefPicStore::new(),
             dpb_entries: Vec::new(),
             poc_state: PocState::default(),
@@ -1273,6 +1282,22 @@ impl H264CodecDecoder {
         } else {
             poc.pic_order_cnt
         };
+
+        // §C.4 open-GOP leading-picture suppression. The first decoded
+        // picture at stream start (or the IDR after a reset) is the
+        // random-access point; its POC is the output floor. Pictures with
+        // a lower output POC are leading pictures (decode-after,
+        // display-before the IRAP) that reference content from before the
+        // random-access point — drop them from output (they remain stored
+        // as references so the decode chain is intact). ffmpeg does the
+        // same. Reset the floor at each IDR.
+        if is_idr {
+            self.output_poc_floor = Some(output_poc);
+        }
+        let floor = *self.output_poc_floor.get_or_insert(output_poc);
+        if output_poc < floor {
+            return Ok(());
+        }
 
         // Emit the VideoFrame (for frame pics) or weave+buffer (for
         // field pics).  Run regardless of grid_complete so the output

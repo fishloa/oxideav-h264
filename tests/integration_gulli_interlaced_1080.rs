@@ -265,7 +265,14 @@ fn conformance_gulli_interlaced_1080() {
         );
     }
 
-    // Promote this to `assert!` once the decoder passes the floor.
-    // Until then, we print the status without failing CI.
-    let _ = psnr_ok;
+    // Issue #11 exit gate — every compared frame must clear the 40 dB
+    // luma PSNR floor vs ffmpeg. PAFF field-picture decode (field scans,
+    // §8.2.4.2.5 field reference lists, frame-unit sliding-window
+    // marking, open-GOP leading-picture suppression) brings the whole
+    // sequence to ~53 dB.
+    assert!(
+        psnr_ok,
+        "[gulli_interlaced_1080] luma PSNR floor not met: {above_40}/{total_compared} \
+         frames above 40 dB (worst {worst_psnr:.2} dB). Issue #11.",
+    );
 }
