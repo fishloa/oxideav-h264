@@ -1894,7 +1894,7 @@ impl Decoder for H264CodecDecoder {
                             // bounded while CABAC desync is being fixed.
                             if matches!(ev, crate::decoder::Event::Slice { .. }) {
                                 slice_count += 1;
-                                if slice_count > 10 {
+                                if slice_count > 200 {
                                     break;
                                 }
                             }
