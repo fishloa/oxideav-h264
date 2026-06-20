@@ -792,38 +792,69 @@ pub fn sliding_window_marking(
     current_frame_num: u32,
     max_frame_num: u32,
 ) {
-    let num_short = dpb.iter().filter(|e| e.is_short_term()).count() as u32;
-    let num_long = dpb.iter().filter(|e| e.is_long_term()).count() as u32;
+    // §8.2.5.3 / §C.4.4 — the count and capacity are in *frame* units:
+    // a complementary reference field pair occupies ONE frame buffer.
+    // (Our DPB stores each field as its own entry, so we group by
+    // `frame_num` for short-term refs and `LongTermFrameIdx` for
+    // long-term.) Counting individual fields would evict at half the
+    // intended capacity. The JM reference decoder
+    // (`sliding_window_memory_management`) likewise compares
+    // `ref_frames_in_buffer` (frames) and unmarks a whole frame.
+    //
+    // When the current picture is the SECOND field of a reference frame
+    // already present in the DPB, it joins that frame buffer — no new
+    // buffer is consumed, so no eviction is performed.
+    if dpb
+        .iter()
+        .any(|e| e.is_ref() && e.frame_num == current_frame_num)
+    {
+        return;
+    }
+
     let cap = max_num_ref_frames.max(1);
 
+    // Distinct short-term reference frames (by frame_num) and long-term
+    // reference frames (by LongTermFrameIdx).
+    let mut short_fnums: Vec<u32> = Vec::new();
+    let mut long_idxs: Vec<u32> = Vec::new();
+    for e in dpb.iter() {
+        if e.is_short_term() && !short_fnums.contains(&e.frame_num) {
+            short_fnums.push(e.frame_num);
+        } else if e.is_long_term() && !long_idxs.contains(&e.long_term_frame_idx) {
+            long_idxs.push(e.long_term_frame_idx);
+        }
+    }
+    let num_short = short_fnums.len() as u32;
+    let num_long = long_idxs.len() as u32;
+
     if num_short + num_long < cap {
-        return; // No eviction needed.
+        return; // Room for the new frame — no eviction needed.
     }
     if num_short == 0 {
-        return; // Nothing short-term to evict (spec's "numShortTerm > 0"
-                // precondition — a conformant stream shouldn't hit this
-                // branch, but we guard anyway).
+        return; // Spec precondition numShortTerm > 0 — guard anyway.
     }
 
-    // Find index of short-term ref with smallest FrameNumWrap.
-    let mut best: Option<(usize, i64)> = None;
-    for (i, e) in dpb.iter().enumerate() {
-        if !e.is_short_term() {
-            continue;
-        }
-        let fnw: i64 = if e.frame_num > current_frame_num {
-            e.frame_num as i64 - max_frame_num as i64
+    // Evict the short-term reference *frame* with the smallest
+    // FrameNumWrap (oldest), marking BOTH of its fields unused.
+    let mut evict_fn: Option<(u32, i64)> = None;
+    for &fn_ in &short_fnums {
+        let fnw: i64 = if fn_ > current_frame_num {
+            fn_ as i64 - max_frame_num as i64
         } else {
-            e.frame_num as i64
+            fn_ as i64
         };
-        match best {
-            None => best = Some((i, fnw)),
-            Some((_, cur_fnw)) if fnw < cur_fnw => best = Some((i, fnw)),
+        match evict_fn {
+            None => evict_fn = Some((fn_, fnw)),
+            Some((_, cur_fnw)) if fnw < cur_fnw => evict_fn = Some((fn_, fnw)),
             _ => {}
         }
     }
-    if let Some((i, _)) = best {
-        dpb[i].marking = RefMarking::Unused;
+    if let Some((fn_evict, _)) = evict_fn {
+        for e in dpb.iter_mut() {
+            if e.is_short_term() && e.frame_num == fn_evict {
+                e.marking = RefMarking::Unused;
+            }
+        }
     }
 }
 
