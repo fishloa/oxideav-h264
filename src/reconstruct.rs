@@ -3167,7 +3167,12 @@ fn reconstruct_mb_inter<R: RefPicProvider>(
             } else {
                 [0i32; 16]
             };
-            let coeffs = crate::transform::inverse_scan_4x4_zigzag(&coeffs_scan);
+            // §8.5.7 — field MBs use the 4x4 field scan.
+            let coeffs = if slice_header.field_pic_flag {
+                crate::transform::inverse_scan_4x4_field(&coeffs_scan)
+            } else {
+                crate::transform::inverse_scan_4x4_zigzag(&coeffs_scan)
+            };
             let residual = inverse_transform_4x4(&coeffs, qp_prime_y, &sl4, bit_depth_y)?;
             for yy in 0..4 {
                 for xx in 0..4 {
